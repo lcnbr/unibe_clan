@@ -6,6 +6,7 @@
     ../../modules/shared.nix
     # enables GNOME desktop (optional)
     # ../../modules/gnome.nix
+    # ../../root-passwd.nix
   ];
 
   # This is your user login name.

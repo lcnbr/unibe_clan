@@ -20,7 +20,7 @@
     flake-parts,
     clan-core,
     impermanence,
-    ...
+    nixpkgs,...
   }:
     flake-parts.lib.mkFlake {inherit inputs;} ({
       self,
@@ -46,13 +46,13 @@
             imports = [
               ./machines/itppeach/configuration.nix
               ./modules/disko.nix
+              ./root-passwd.nix
               impermanence.nixosModules.impermanence
             ];
             nixpkgs.hostPlatform = "x86_64-linux";
+            # clan.core.networking.targetHost = "root@130.92.184.147";
 
             # Set this for clan commands use ssh i.e. `clan machines update`
-            clan.core.networking.targetHost = pkgs.lib.mkDefault "root@itppeach";
-
             # There needs to be exactly one controller per clan
             clan.core.networking.zerotier.controller.enable = true;
           };

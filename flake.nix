@@ -46,7 +46,7 @@
             imports = [
               ./machines/itppeach/configuration.nix
               ./modules/disko.nix
-              ./root-passwd.nix
+              # ./root-passwd.nix
               impermanence.nixosModules.impermanence
             ];
             nixpkgs.hostPlatform = "x86_64-linux";

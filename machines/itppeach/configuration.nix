@@ -33,17 +33,17 @@
 
    boot.initrd.systemd.enable = true;
 
-   boot.initrd.systemd.services.reset = {
-       description = "reset root filesystem";
-       wantedBy = [ "initrd.target" ];
-       after = [ "zfs-import-zroot.service" ];
-       before = [ "sysroot.mount" ];
-       path = with pkgs; [ zfs ];
-       unitConfig.DefaultDependencies = "no";
-       serviceConfig.Type = "oneshot";
-       script = ''
-           zfs rollback -r zroot/local/root@blank'';
-     };
+   # boot.initrd.systemd.services.reset = {
+   #     description = "reset root filesystem";
+   #     wantedBy = [ "initrd.target" ];
+   #     after = [ "zfs-import-zroot.service" ];
+   #     before = [ "sysroot.mount" ];
+   #     path = with pkgs; [ zfs ];
+   #     unitConfig.DefaultDependencies = "no";
+   #     serviceConfig.Type = "oneshot";
+   #     script = ''
+   #         zfs rollback -r zroot/local/root@blank'';
+   #   };
 
    environment.persistence."/persist" = {
        enable = true;  # NB: Defaults to true, not needed
@@ -83,7 +83,7 @@
   users.users = {
     root={
       openssh.authorizedKeys.keys = [
-        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILwU7t6UJmWcDd+oayloWbTNixqe5J010amkU0p/7gKc im@lcnbr.ch"
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINtX6CwxVynoCr86hgSrNVmqlzDaTzc9h5z+Sy9n5kYL im@lcnbr.ch"
       ];
       # initialHashedPassword="$6$1EKwWplF7X6IP7d4$hcpJVomZ4k0LH8lpnNjkgcYJwciDh/fvcOo0/fSrg/z/VT.DQjN4weLg3gtZI4wniETjeycJbQAu6ElTBqFyN0";
     };
@@ -91,7 +91,7 @@
       isNormalUser = true;
       # initialHashedPassword="$6$1EKwWplF7X6IP7d4$hcpJVomZ4k0LH8lpnNjkgcYJwciDh/fvcOo0/fSrg/z/VT.DQjN4weLg3gtZI4wniETjeycJbQAu6ElTBqFyN0";
       openssh.authorizedKeys.keys = [
-        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILwU7t6UJmWcDd+oayloWbTNixqe5J010amkU0p/7gKc im@lcnbr.ch"
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINtX6CwxVynoCr86hgSrNVmqlzDaTzc9h5z+Sy9n5kYL im@lcnbr.ch"
       ];
       extraGroups = ["wheel" "networkmanager"];
     };

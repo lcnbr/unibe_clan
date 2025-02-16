@@ -14,8 +14,8 @@
 
   # generate a random password for our user below
   # can be read using `clan secrets get <machine-name>-user-password` command
-  clan.user-password.user = "user";
-  users.users.user = {
+  clan.user-password.user = "lcnbr";
+  users.users.lcnbr = {
     isNormalUser = true;
     extraGroups = [
       "wheel"

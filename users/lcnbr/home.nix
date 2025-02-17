@@ -1,4 +1,8 @@
-{...}: {
+{pkgs,...}: {
+
+  home.packages = with pkgs;[
+    viddy
+  ];
   programs = {
     gh = {
       enable = true;

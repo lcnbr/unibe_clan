@@ -12,6 +12,20 @@
       enable = true;
     };
 
+    helix= {
+      enable = true;
+    };
+
+
+    direnv = {
+          enable = true;
+          enableBashIntegration = true;
+          enableNushellIntegration = true;
+          nix-direnv.enable = true;
+        };
+
+
+
     jujutsu = {
       enable = true;
       settings={
@@ -19,6 +33,9 @@
           email="im@lcnbr.ch";
           name="Lucien Huber";
         };
+      revset-aliases={
+        "immutable_heads()" = "builtin_immutable_heads() | remote_bookmarks()";
+      };
       };
     };
 

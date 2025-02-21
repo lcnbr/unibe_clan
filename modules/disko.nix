@@ -3,8 +3,9 @@
   clan-core,
   #config,
   ...
-}: #let
-  # suffix = config.clan.core.vars.generators.disk-id.files.diskId.value;
+}:
+#let
+# suffix = config.clan.core.vars.generators.disk-id.files.diskId.value;
 #in
 {
   imports = [
@@ -20,7 +21,7 @@
     disk = {
       "main" = {
         # suffix is to prevent disk name collisions
-        name = "main-";# + suffix;
+        name = "main-"; # + suffix;
         type = "disk";
         # Set the following in flake.nix for each maschine:
         # device = <uuid>;

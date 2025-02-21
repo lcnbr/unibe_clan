@@ -1,6 +1,5 @@
-{pkgs,...}: {
-
-  home.packages = with pkgs;[
+{pkgs, ...}: {
+  home.packages = with pkgs; [
     viddy
   ];
   programs = {
@@ -16,30 +15,27 @@
       enable = true;
     };
 
-    helix= {
+    helix = {
       enable = true;
     };
 
-
     direnv = {
-          enable = true;
-          enableBashIntegration = true;
-          enableNushellIntegration = true;
-          nix-direnv.enable = true;
-        };
-
-
+      enable = true;
+      enableBashIntegration = true;
+      enableNushellIntegration = true;
+      nix-direnv.enable = true;
+    };
 
     jujutsu = {
       enable = true;
-      settings={
-        user={
-          email="im@lcnbr.ch";
-          name="Lucien Huber";
+      settings = {
+        user = {
+          email = "im@lcnbr.ch";
+          name = "Lucien Huber";
         };
-      revset-aliases={
-        "immutable_heads()" = "builtin_immutable_heads() | remote_bookmarks()";
-      };
+        revset-aliases = {
+          "immutable_heads()" = "builtin_immutable_heads() | remote_bookmarks()";
+        };
       };
     };
 
@@ -62,7 +58,6 @@
         theme = "catppuccin-frappe";
       };
     };
-
   };
 
   home.stateVersion = "25.05";

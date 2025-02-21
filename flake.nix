@@ -53,19 +53,32 @@
               impermanence.nixosModules.impermanence
               home-manager.nixosModules.home-manager
               {
-                home-manager.backupFileExtension="backup";
+                home-manager.backupFileExtension = "backup";
                 home-manager.useGlobalPkgs = true;
                 home-manager.useUserPackages = true;
                 home-manager.users.lcnbr = import ./users/lcnbr/home.nix;
-                home-manager.extraSpecialArgs = { inherit inputs; };
+                home-manager.extraSpecialArgs = {inherit inputs;};
               }
             ];
             nixpkgs.hostPlatform = "x86_64-linux";
-            # clan.core.networking.targetHost = "root@130.92.184.147";
+          };
 
-            # Set this for clan commands use ssh i.e. `clan machines update`
-            # There needs to be exactly one controller per clan
-            clan.core.networking.zerotier.controller.enable = true;
+          itphlies = {
+            imports = [
+              ./machines/itphlies/configuration.nix
+              ./modules/user-disko.nix
+              # ./root-passwd.nix
+              impermanence.nixosModules.impermanence
+              home-manager.nixosModules.home-manager
+              {
+                home-manager.backupFileExtension = "backup";
+                home-manager.useGlobalPkgs = true;
+                home-manager.useUserPackages = true;
+                home-manager.users.lcnbr = import ./users/lcnbr/home.nix;
+                home-manager.extraSpecialArgs = {inherit inputs;};
+              }
+            ];
+            nixpkgs.hostPlatform = "x86_64-linux";
           };
         };
       };

@@ -1,4 +1,8 @@
-{lib,pkgs,...}:{
+{
+  lib,
+  pkgs,
+  ...
+}: {
   imports = [
     # contains your disk format and partitioning configuration.
     ../../modules/disko.nix
@@ -15,78 +19,108 @@
   # Set this for clan commands use ssh i.e. `clan machines update`
   # If you change the hostname, you need to update this line to root@<new-hostname>
   # This only works however if you have avahi running on your admin machine else use IP
-  clan.core.networking.targetHost = "root@130.92.184.147";
+  clan.core.networking.targetHost = "root@130.92.184.229";
 
   networking.hostName = "itppeach";
-  networking.hostId="aaaa3453";
-
-  fileSystems."/persist" =
+  networking.hostId = "aaaa3453";
+  networking.interfaces.enp7s0.ipv4.addresses = [
     {
-    neededForBoot=true;
+      address = "130.92.184.229";
+      prefixLength = 24;
+    }
+  ];
+
+  networking.defaultGateway.interface = "enp7s0";
+
+  # networking.defaultGateway.interface = "wlp170s0";
+  networking.defaultGateway.address = "130.92.184.1";
+  networking.nameservers = ["130.92.9.52" "130.92.9.53"];
+
+  fileSystems."/persist" = {
+    neededForBoot = true;
     device = "zroot/local/persist";
-      fsType = "zfs";
-    };
+    fsType = "zfs";
+  };
 
   # boot.initrd.postResumeCommands = lib.mkAfter ''
   #    zfs rollback -r zroot/local/root@blank && echo "rollback complete"
   #  '';
 
-   boot.initrd.systemd.enable = true;
+  boot.initrd.systemd.enable = true;
 
-   # boot.initrd.systemd.services.reset = {
-   #     description = "reset root filesystem";
-   #     wantedBy = [ "initrd.target" ];
-   #     after = [ "zfs-import-zroot.service" ];
-   #     before = [ "sysroot.mount" ];
-   #     path = with pkgs; [ zfs ];
-   #     unitConfig.DefaultDependencies = "no";
-   #     serviceConfig.Type = "oneshot";
-   #     script = ''
-   #         zfs rollback -r zroot/local/root@blank'';
-   #   };
-
-   environment.persistence."/persist" = {
-       enable = true;  # NB: Defaults to true, not needed
-       hideMounts = true;
-       directories = [
-         "/var/log"
-         "/var/lib/bluetooth"
-         "/var/lib/nixos"
-         "/var/lib/systemd/coredump"
-         "/etc/NetworkManager/system-connections"
-         { directory = "/var/lib/colord"; user = "colord"; group = "colord"; mode = "u=rwx,g=rx,o="; }
-       ];
-       users.lcnbr = {
-         directories = [
-           "documents"
-           "media"
-           "dev"
-           { directory = ".gnupg"; mode = "0700"; }
-           { directory = ".ssh"; mode = "0700"; }
-           { directory = ".nixops"; mode = "0700"; }
-           { directory = ".local/share/keyrings"; mode = "0700"; }
-           ".local/share/direnv"
-         ];
-         files = [
-           ".screenrc"
-         ];
-       };
-     };
+  # boot.initrd.systemd.services.reset = {
+  #     description = "reset root filesystem";
+  #     wantedBy = [ "initrd.target" ];
+  #     after = [ "zfs-import-zroot.service" ];
+  #     before = [ "sysroot.mount" ];
+  #     path = with pkgs; [ zfs ];
+  #     unitConfig.DefaultDependencies = "no";
+  #     serviceConfig.Type = "oneshot";
+  #     script = ''
+  #         zfs rollback -r zroot/local/root@blank'';
+  #   };
+  users.users.lcnbr = {
+    isNormalUser = true;
+    extraGroups = [
+      "wheel"
+      "networkmanager"
+      "video"
+      "input"
+    ];
+    uid = 1000;
+    openssh.authorizedKeys.keys = [
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINtX6CwxVynoCr86hgSrNVmqlzDaTzc9h5z+Sy9n5kYL im@lcnbr.ch"
+    ];
+  };
+  environment.persistence."/persist" = {
+    enable = true; # NB: Defaults to true, not needed
+    hideMounts = true;
+    directories = [
+      "/var/log"
+      "/var/lib/bluetooth"
+      "/var/lib/nixos"
+      "/var/lib/systemd/coredump"
+      "/etc/NetworkManager/system-connections"
+      {
+        directory = "/var/lib/colord";
+        user = "colord";
+        group = "colord";
+        mode = "u=rwx,g=rx,o=";
+      }
+    ];
+    users.lcnbr = {
+      directories = [
+        "documents"
+        "media"
+        "dev"
+        {
+          directory = ".gnupg";
+          mode = "0700";
+        }
+        {
+          directory = ".ssh";
+          mode = "0700";
+        }
+        {
+          directory = ".nixops";
+          mode = "0700";
+        }
+        {
+          directory = ".local/share/keyrings";
+          mode = "0700";
+        }
+        ".local/share/direnv"
+      ];
+      files = [
+        ".screenrc"
+      ];
+    };
+  };
 
   # You can get your disk id by running the following command on the installer:
   # Replace <IP> with the IP of the installer printed on the screen or by running the `ip addr` command.
   # ssh root@<IP> lsblk --output NAME,ID-LINK,FSTYPE,SIZE,MOUNTPOINT
   disko.devices.disk.main.device = "/dev/disk/by-id/wwn-0x55cd2e41503ed9cb";
-
-
-
-
-
-
-  # Zerotier needs one controller to accept new nodes. Once accepted
-  # the controller can be offline and routing still works.
-  clan.core.networking.zerotier.controller.enable = true;
-
 
   system.stateVersion = "25.05";
 }

@@ -1,5 +1,8 @@
-{config, pkgs, ...}: {
-
+{
+  config,
+  pkgs,
+  ...
+}: {
   clan.core.vars.generators.root-password = {
     # prompt the user for a password
     # (`password-input` being an arbitrary name)
@@ -14,7 +17,7 @@
       cat $prompts/password-input | mkpasswd -m sha-512 > $out/password-hash
     '';
     # the tools required by the script
-    runtimeInputs = [ pkgs.mkpasswd ];
+    runtimeInputs = [pkgs.mkpasswd];
   };
 
   # ensure users are immutable (otherwise the following config might be ignored)

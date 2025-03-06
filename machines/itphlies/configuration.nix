@@ -26,6 +26,18 @@ in {
         openssh.authorizedKeys.keys = userSpec.sshKeys or [];
       });
 
+      # security.acls.enable = true;
+
+        # Ensure the directory structure persists
+        systemd.tmpfiles.rules = let
+          userDirRules = builtins.concatStringsSep "\n" (map (user: ''
+            d /shared/${user.name} 0750 ${user.name} users -
+          '') userData.users);
+        in [
+          "d /shared 0755 root root -"
+          userDirRules
+        ];
+
   users.groups = userData.groups;
 
   services.openssh.enable = true;

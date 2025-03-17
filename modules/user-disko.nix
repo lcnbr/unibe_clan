@@ -52,12 +52,19 @@ in {
       zroot = {
         type = "zpool";
         options.ashift = "12";
+        rootFsOptions = {
+          # https://wiki.archlinux.org/title/Install_Arch_Linux_on_ZFS
+          acltype = "posixacl";
+          atime = "off";
+          compression = "zstd";
+          mountpoint = "none";
+          xattr = "sa";
+        };
 
         datasets =
           {
             "local" = {
               type = "zfs_fs";
-              mountpoint = "none";
             };
 
             "local/home" = {
@@ -84,26 +91,26 @@ in {
                   options = {
                     "com.sun:auto-snapshot" = "true";
                   };
-                  postCreateHook = ''
-                    # Create base shared directory
-                    mkdir -p /shared
-                    chmod 755 /shared
+                  # postCreateHook = ''
+                  #   # Create base shared directory
+                  #   mkdir -p /shared
+                  #   chmod 755 /shared
 
-                    # Create and set permissions for each user's directory
-                    ${builtins.concatStringsSep "\n" (map (user: ''
-                      mkdir -p /shared/${user.name}
-                      chown ${user.name}:users /shared/${user.name}
-                      chmod 750 /shared/${user.name}
+                  #   # Create and set permissions for each user's directory
+                  #   ${builtins.concatStringsSep "\n" (map (user: ''
+                  #     mkdir -p /shared/${user.name}
+                  #     chown ${user.name}:users /shared/${user.name}
+                  #     chmod 750 /shared/${user.name}
 
-                      # Set ACLs for the user directory
-                      setfacl -m u:${user.name}:rwx /shared/${user.name}
-                      setfacl -m g:users:rx /shared/${user.name}
+                  #     # Set ACLs for the user directory
+                  #     setfacl -m u:${user.name}:rwx /shared/${user.name}
+                  #     setfacl -m g:users:rx /shared/${user.name}
 
-                      # Set default ACLs for new files/directories
-                      setfacl -d -m u:${user.name}:rwx /shared/${user.name}
-                      setfacl -d -m g:users:rx /shared/${user.name}
-                    '') userData.users)}
-                  '';
+                  #     # Set default ACLs for new files/directories
+                  #     setfacl -d -m u:${user.name}:rwx /shared/${user.name}
+                  #     setfacl -d -m g:users:rx /shared/${user.name}
+                  #   '') userData.users)}
+                  # '';
                 };
 
             # 3) Then for each user, create a child dataset named local/home/<username>.

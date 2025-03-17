@@ -7,8 +7,8 @@
 in {
   imports = [
     # contains your disk format and partitioning configuration.
-    ../../modules/disko.nix
-    ../../modules/shared.nix
+    ../../modules/user-disko.nix
+    # ../../modules/shared.nix
     # ../../root-passwd.nix
   ];
 
@@ -41,11 +41,13 @@ in {
   users.groups = userData.groups;
 
   services.openssh.enable = true;
-  services.openssh.passwordAuthentication = false;
-  services.openssh.permitRootLogin = "no";
-
+  services.openssh.settings.PasswordAuthentication = false;
+  services.openssh.settings.PermitRootLogin = "no";
+  # security.sudo.enable = true;
+  security.sudo.wheelNeedsPassword=false;
   clan.core.networking.targetHost = "root@itphlies";
 
+  security.sudo.execWheelOnly=true;
   networking.hostName = "itphlies";
   networking.hostId = "a1a034da";
   networking.interfaces.eno1np0.ipv4.addresses = [
@@ -61,6 +63,11 @@ in {
   networking.nameservers = ["130.92.9.52" "130.92.9.53"];
 
   boot.initrd.systemd.enable = true;
+
+  programs.nix-ld.enable = true;
+  environment.systemPackages = [
+      pkgs.ipmitool
+    ];
 
   disko.devices.disk.main.device = "/dev/disk/by-id/nvme-WUS5EA1A1ESP5E3_240420800175";
 

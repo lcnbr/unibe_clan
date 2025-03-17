@@ -68,12 +68,12 @@
               ./machines/itphlies/configuration.nix
               ./modules/user-disko.nix
               # ./root-passwd.nix
-              impermanence.nixosModules.impermanence
+              # impermanence.nixosModules.impermanence
               home-manager.nixosModules.home-manager
               {
-                home-manager.backupFileExtension = "backup";
-                home-manager.useGlobalPkgs = true;
-                home-manager.useUserPackages = true;
+                # home-manager.backupFileExtension = "backup";
+                # home-manager.useGlobalPkgs = true;
+                # home-manager.useUserPackages = true;
                 home-manager.users.lcnbr = import ./users/lcnbr/home.nix;
                 home-manager.extraSpecialArgs = {inherit inputs;};
               }

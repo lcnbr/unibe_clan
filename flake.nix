@@ -5,7 +5,9 @@
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
     home-manager.url = "github:nix-community/home-manager";
     home-manager.inputs.nixpkgs.follows = "nixpkgs";
+    zen-browser.url = "github:0xc000022070/zen-browser-flake";
 
+    nixos-cosmic.url = "github:lilyinstarlight/nixos-cosmic";
     # New flake-parts input
     flake-parts.url = "github:hercules-ci/flake-parts";
     flake-parts.inputs.nixpkgs-lib.follows = "nixpkgs";
@@ -23,6 +25,7 @@
     clan-core,
     impermanence,
     home-manager,
+    nixos-cosmic,
     ...
   }:
     flake-parts.lib.mkFlake {inherit inputs;} ({
@@ -47,8 +50,11 @@
         machines = {
           itppeach = {
             imports = [
+              {
+                _module.args.inputs = inputs;
+              }
               ./machines/itppeach/configuration.nix
-              ./modules/disko.nix
+              # ./modules/disko.nix
               # ./root-passwd.nix
               impermanence.nixosModules.impermanence
               home-manager.nixosModules.home-manager
@@ -58,7 +64,12 @@
                 home-manager.useUserPackages = true;
                 home-manager.users.lcnbr = import ./users/lcnbr/home.nix;
                 home-manager.extraSpecialArgs = {inherit inputs;};
+                nix.settings = {
+                              substituters = [ "https://cosmic.cachix.org/" ];
+                              trusted-public-keys = [ "cosmic.cachix.org-1:Dya9IyXD4xdBehWjrkPv6rtxpmMdRel02smYzA85dPE=" ];
+                            };
               }
+               nixos-cosmic.nixosModules.default
             ];
             nixpkgs.hostPlatform = "x86_64-linux";
           };
@@ -66,17 +77,7 @@
           itphlies = {
             imports = [
               ./machines/itphlies/configuration.nix
-              ./modules/user-disko.nix
-              # ./root-passwd.nix
-              # impermanence.nixosModules.impermanence
               home-manager.nixosModules.home-manager
-              {
-                # home-manager.backupFileExtension = "backup";
-                # home-manager.useGlobalPkgs = true;
-                # home-manager.useUserPackages = true;
-                home-manager.users.lcnbr = import ./users/lcnbr/home.nix;
-                home-manager.extraSpecialArgs = {inherit inputs;};
-              }
             ];
             nixpkgs.hostPlatform = "x86_64-linux";
           };

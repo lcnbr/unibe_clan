@@ -1,5 +1,6 @@
 {
   lib,
+  inputs,
   pkgs,
   ...
 }: {
@@ -15,6 +16,13 @@
 
   # This is your user login name.
   # users.users.user.name = "lcnbr";
+  environment.systemPackages = [
+    inputs.zen-browser.packages."x86_64-linux".default
+    pkgs.ghostty
+    pkgs.vial
+    pkgs.zed-editor
+    pkgs.via
+  ];
 
   # Set this for clan commands use ssh i.e. `clan machines update`
   # If you change the hostname, you need to update this line to root@<new-hostname>
@@ -42,6 +50,8 @@
     fsType = "zfs";
   };
 
+  services.desktopManager.cosmic.enable = true;
+  services.displayManager.cosmic-greeter.enable = true;
   # boot.initrd.postResumeCommands = lib.mkAfter ''
   #    zfs rollback -r zroot/local/root@blank && echo "rollback complete"
   #  '';
@@ -67,11 +77,16 @@
       "video"
       "input"
     ];
+    initialHashedPassword="$6$1EKwWplF7X6IP7d4$hcpJVomZ4k0LH8lpnNjkgcYJwciDh/fvcOo0/fSrg/z/VT.DQjN4weLg3gtZI4wniETjeycJbQAu6ElTBqFyN0";
     uid = 1000;
     openssh.authorizedKeys.keys = [
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINtX6CwxVynoCr86hgSrNVmqlzDaTzc9h5z+Sy9n5kYL im@lcnbr.ch"
+      "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDGH3TKx0kYGIqcAfB2LmYktsJKnZC8lExz4vymEgBR/z7M11pdf/QgPDYXuLQ+f2LqtMNk5cA7kcmKT+j8H93KrzUOYnfItMR1oRVXbDnvLcLxwtIlXV4MBFxZkMocNBMSpuI9sDLaNeDBvIxBIp80DCFENgXzIRbY4FC2ghnFJHXo+k0Gru+JD7kFoFM8yQmszpWqOqS0J64gA/u8Qx6HdJWGpNslaQbYc9jCKCPXXsJXlBNWTB+HZY9ufZXQdvetsueTMUJJIs4aqHfYbYjN7BUGBLm2wmcp2vz5BAROMbHH/c1Zmxa0GWWfrQQkFru/SHiB30OMKRnR0cjIIRmFtuaMjwAlEkzUT6OF+b2baMmRmXFLfKzpTEDun1UysmrbfzRLjbHPW+s4xIH9Nrhn5ggiY4x2Yf5QGOB4DaehAWjqyAKONhNwRB0m0CaTBzd4jTWjsc0m5/iuP2JzGsiFLcWONVH2k/4/Olh/gbQCNz+FCRoBebNwZZ31FwFT6AE= vjhirsch@itp80.unibe.ch"
     ];
   };
+
+
+
 
   programs.nix-ld.enable = true;
 
@@ -159,7 +174,7 @@
       ];
     };
   };
-
+nix.settings.trusted-users = [ "root" "lcnbr" ];
   # You can get your disk id by running the following command on the installer:
   # Replace <IP> with the IP of the installer printed on the screen or by running the `ip addr` command.
   # ssh root@<IP> lsblk --output NAME,ID-LINK,FSTYPE,SIZE,MOUNTPOINT

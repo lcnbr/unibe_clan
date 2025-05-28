@@ -8,8 +8,7 @@ in {
   imports = [
     # contains your disk format and partitioning configuration.
     ../../modules/user-disko.nix
-    # ../../modules/shared.nix
-    # ../../root-passwd.nix
+    ../../modules/shared.nix
   ];
 
   users.users =
@@ -26,7 +25,6 @@ in {
         openssh.authorizedKeys.keys = userSpec.sshKeys or [];
       });
 
-      # security.acls.enable = true;
 
         # Ensure the directory structure persists
         systemd.tmpfiles.rules = let
@@ -43,9 +41,9 @@ in {
   services.openssh.enable = true;
   services.openssh.settings.PasswordAuthentication = false;
   services.openssh.settings.PermitRootLogin = "no";
-  # security.sudo.enable = true;
-  security.sudo.wheelNeedsPassword=false;
-  clan.core.networking.targetHost = "root@itphlies";
+  security.sudo.enable = true;
+  security.sudo.wheelNeedsPassword = false;
+  clan.core.networking.targetHost = "mercury@itphlies";
 
   security.sudo.execWheelOnly=true;
   networking.hostName = "itphlies";
@@ -63,11 +61,20 @@ in {
   networking.nameservers = ["130.92.9.52" "130.92.9.53"];
 
   boot.initrd.systemd.enable = true;
+  # boot.supportedFilesystems = [ "zfs" ];
+  # boot.zfs.devNodes = "/dev/disk/by-id";
+  # boot.zfs.forceImportRoot = false;
+  boot.initrd.systemd.emergencyAccess = true;
 
   programs.nix-ld.enable = true;
   environment.systemPackages = [
       pkgs.ipmitool
     ];
+
+  # Set mercury as the default user for local login and emergency console
+  services.getty.autologinUser = "mercury";
+
+
 
   disko.devices.disk.main.device = "/dev/disk/by-id/nvme-WUS5EA1A1ESP5E3_240420800175";
 

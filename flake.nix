@@ -35,7 +35,12 @@
     }: {
       # We define our own systems below. you can still use this to add system specific outputs to your flake.
       # See: https://flake.parts/getting-started
-      systems = ["x86_64-linux"];
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "x86_64-darwin"
+        "aarch64-darwin"
+      ];
 
       # import clan-core modules
       imports = [
@@ -45,31 +50,25 @@
       # See: https://docs.clan.lol/reference/nix-api/buildclan/
       clan = {
         # Clan wide settings. (Required)
-        meta.name = "Unibe clan"; # Ensure to choose a unique name.
+        meta.name = "unibe-clan"; # Ensure to choose a unique name.
+
+        modules.tailscale = import ./service-modules/tailscale.nix;
+
+        inventory.instances.tailscale = {
+          module = {
+            name = "tailscale";
+            input = "self";
+          };
+
+          roles.peer.machines.itppeach = {};
+          roles.peer.machines.itphlies = {};
+        };
 
         machines = {
           itppeach = {
             imports = [
-              {
-                _module.args.inputs = inputs;
-              }
               ./machines/itppeach/configuration.nix
-              # ./modules/disko.nix
-              # ./root-passwd.nix
-              impermanence.nixosModules.impermanence
               home-manager.nixosModules.home-manager
-              {
-                home-manager.backupFileExtension = "backup";
-                home-manager.useGlobalPkgs = true;
-                home-manager.useUserPackages = true;
-                home-manager.users.lcnbr = import ./users/lcnbr/home.nix;
-                home-manager.extraSpecialArgs = {inherit inputs;};
-                nix.settings = {
-                              substituters = [ "https://cosmic.cachix.org/" ];
-                              trusted-public-keys = [ "cosmic.cachix.org-1:Dya9IyXD4xdBehWjrkPv6rtxpmMdRel02smYzA85dPE=" ];
-                            };
-              }
-               nixos-cosmic.nixosModules.default
             ];
             nixpkgs.hostPlatform = "x86_64-linux";
           };

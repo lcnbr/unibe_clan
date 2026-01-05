@@ -1,4 +1,6 @@
-{
-  "publickey": "age1dejwcw3kufaaplv2wrxne8qk59n02slvsjyzfxedud8el2e7090sdtmw7y",
-  "type": "age"
-}
+[
+  {
+    "publickey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA3c4BHqDDrZGI6WrbwO5MEg+blmSy7igkQS+miH5roX",
+    "type": "age"
+  }
+]

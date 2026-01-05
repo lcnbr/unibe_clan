@@ -13,4 +13,5 @@
 - Tailscale auth uses a shared vars generator `clan.core.vars.generators.tailscale-auth-key` with `share = true` (sops-backed secret).
 - Use Clan inventory roles (`inventory.instances.<name>.roles.<role>`) to assign services to machines instead of duplicating per-host config.
 - Secrets/vars are stored via Clan (sops) under `sops/` and generated with `clan vars generate`.
+- In `jj`, the working copy `@` is the active change; keep it and work on top of it.
 </INSTRUCTIONS>

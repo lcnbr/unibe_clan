@@ -19,6 +19,7 @@ in {
     in {
       isNormalUser = true;
       uid = userSpec.uid;
+      shell = userSpec.shell or null;
       extraGroups = (userSpec.extraGroups or []) ++ ["users" "wheel"];
       home = "/home/${userName}";
       description = userSpec.description or "";
@@ -48,7 +49,7 @@ in {
   services.openssh.settings.PermitRootLogin = "no";
   security.sudo.enable = true;
   security.sudo.wheelNeedsPassword = false;
-  clan.core.networking.targetHost = "mercury@130.92.184.229";
+  clan.core.networking.targetHost = "lcnbr@130.92.184.229";
 
   security.sudo.execWheelOnly = true;
   networking.hostName = "itppeach";

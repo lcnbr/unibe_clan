@@ -14,4 +14,5 @@
 - Use Clan inventory roles (`inventory.instances.<name>.roles.<role>`) to assign services to machines instead of duplicating per-host config.
 - Secrets/vars are stored via Clan (sops) under `sops/` and generated with `clan vars generate`.
 - In `jj`, the working copy `@` is the active change; keep it and work on top of it.
+- Prefer a `jj new` per logical change with `jj describe -m "<message>"`, then `jj squash` to combine later; avoid repeatedly overwriting the same `@` description.
 </INSTRUCTIONS>

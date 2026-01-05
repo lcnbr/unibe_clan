@@ -13,28 +13,29 @@ in {
 
   users.users =
     lib.genAttrs
-      (map (u: u.name) userData.users)
-      (userName: let
-        userSpec = lib.findFirst (u: u.name == userName) null userData.users;
-      in {
-        isNormalUser = true;
-        uid = userSpec.uid;
-        extraGroups = (userSpec.extraGroups or []) ++ [ "users" "wheel" ];
-        home = "/home/${userName}";
-        description = userSpec.description or "";
-        openssh.authorizedKeys.keys = userSpec.sshKeys or [];
-      });
+    (map (u: u.name) userData.users)
+    (userName: let
+      userSpec = lib.findFirst (u: u.name == userName) null userData.users;
+    in {
+      isNormalUser = true;
+      uid = userSpec.uid;
+      shell = userSpec.shell or null;
+      extraGroups = (userSpec.extraGroups or []) ++ ["users" "wheel"];
+      home = "/home/${userName}";
+      description = userSpec.description or "";
+      openssh.authorizedKeys.keys = userSpec.sshKeys or [];
+    });
 
-
-        # Ensure the directory structure persists
-        systemd.tmpfiles.rules = let
-          userDirRules = builtins.concatStringsSep "\n" (map (user: ''
-            d /shared/${user.name} 0750 ${user.name} users -
-          '') userData.users);
-        in [
-          "d /shared 0755 root root -"
-          userDirRules
-        ];
+  # Ensure the directory structure persists
+  systemd.tmpfiles.rules = let
+    userDirRules = builtins.concatStringsSep "\n" (map (user: ''
+        d /shared/${user.name} 0750 ${user.name} users -
+      '')
+      userData.users);
+  in [
+    "d /shared 0755 root root -"
+    userDirRules
+  ];
 
   users.groups = userData.groups;
 
@@ -43,9 +44,9 @@ in {
   services.openssh.settings.PermitRootLogin = "no";
   security.sudo.enable = true;
   security.sudo.wheelNeedsPassword = false;
-  clan.core.networking.targetHost = "mercury@itphlies";
+  clan.core.networking.targetHost = "lcnbr@130.92.184.209";
 
-  security.sudo.execWheelOnly=true;
+  security.sudo.execWheelOnly = true;
   networking.hostName = "itphlies";
   networking.hostId = "a1a034da";
   networking.interfaces.eno1np0.ipv4.addresses = [
@@ -68,13 +69,11 @@ in {
 
   programs.nix-ld.enable = true;
   environment.systemPackages = [
-      pkgs.ipmitool
-    ];
+    pkgs.ipmitool
+  ];
 
   # Set mercury as the default user for local login and emergency console
   services.getty.autologinUser = "mercury";
-
-
 
   disko.devices.disk.main.device = "/dev/disk/by-id/nvme-WUS5EA1A1ESP5E3_240420800175";
 

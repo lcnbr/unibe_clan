@@ -1,4 +1,8 @@
-{pkgs, ...}: {
+{
+  pkgs,
+  lib,
+  ...
+}: {
   home.packages = with pkgs; [
     viddy
     devenv
@@ -12,8 +16,33 @@
     };
 
     starship = {
-      enableNushellIntegration = true;
       enable = true;
+      settings = {
+        add_newline = false;
+        format = lib.concatStrings [
+          "$shlvl"
+          "$shell"
+          "$username"
+          "$hostname"
+          "$nix_shell"
+          "$git_branch"
+          "$git_commit"
+          "$git_state"
+          "$git_status"
+          "$directory"
+          "$jobs"
+          "$cmd_duration"
+          "$character"
+        ];
+        scan_timeout = 10;
+        # character = {
+        #   success_symbol = "➜";
+        #   error_symbol = "➜";
+        # };
+      };
+
+      enableFishIntegration = true;
+      enableNushellIntegration = true;
     };
 
     helix = {
@@ -21,14 +50,17 @@
     };
 
     bash = {
-      enable=true;
+      enable = true;
+    };
+
+    fish = {
+      enable = true;
     };
 
     direnv = {
       enable = true;
       enableBashIntegration = true;
-      enableNushellIntegration = true;
-      # nix-direnv.enable = true;
+      nix-direnv.enable = true;
     };
 
     jujutsu = {
@@ -42,11 +74,10 @@
 
     git = {
       enable = true;
-      signing={
-        format="ssh";
+      signing = {
+        format = "ssh";
       };
     };
-
 
     zellij = {
       enable = true;

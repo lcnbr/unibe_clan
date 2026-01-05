@@ -2,10 +2,36 @@
   pkgs,
   clan-core,
   config,
+  lib,
   ...
-}: {
+}: let
+  userData = import ../user-list.nix;
+  defaultHomeConfig = ../users/default/home.nix;
+in {
   imports = [
   ];
+
+  # Configure Nix for flake-based systems
+  nix = {
+    # Set nixPath to flake's nixpkgs for compatibility while avoiding channel warnings
+    nixPath = ["nixpkgs=${pkgs.path}"];
+
+    # Enable flakes and new nix command
+    settings = {
+      experimental-features = ["nix-command" "flakes"];
+      # Prevent looking for channels
+      auto-optimise-store = true;
+      # Increase download buffer size to prevent warnings
+      download-buffer-size = 134217728; # 128 MiB
+    };
+
+    # Clean up old generations automatically
+    gc = {
+      automatic = true;
+      dates = "weekly";
+      options = "--delete-older-than 30d";
+    };
+  };
 
   # Locale service discovery and mDNS
   services.avahi.enable = true;
@@ -16,8 +42,12 @@
   services.openssh.enable = true;
   services.openssh.settings.PasswordAuthentication = false;
   services.openssh.settings.PermitRootLogin = "no";
+  services.openssh.settings.DenyUsers = ["mercury"];
 
   environment.systemPackages = with pkgs; [tailscale btop];
+
+  # Enable fish shell system-wide
+  programs.fish.enable = true;
 
   clan.core.vars.generators.tailscale-auth-key = {
     share = true;
@@ -48,5 +78,27 @@
     #   ];
     #   # extraGroups = ["wheel" "networkmanager"];
     # };
+  };
+
+  # Home Manager configuration
+  home-manager = {
+    useGlobalPkgs = true;
+    useUserPackages = true;
+    backupFileExtension = "backup";
+    users = let
+      # Configure home-manager for all users, using their specific config or default
+      homeManagerUsers =
+        lib.genAttrs
+        (map (u: u.name) userData.users)
+        (userName: let
+          userSpec = lib.findFirst (u: u.name == userName) null userData.users;
+          homeConfig =
+            if userSpec ? homeManagerFile && userSpec.homeManagerFile != null
+            then userSpec.homeManagerFile
+            else defaultHomeConfig;
+        in
+          import homeConfig);
+    in
+      homeManagerUsers;
   };
 }

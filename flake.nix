@@ -96,6 +96,9 @@
             pkgs.nixd
             pkgs.alejandra
           ];
+          shellHook = ''
+            export NIX_PATH=""
+          '';
         };
       };
     });

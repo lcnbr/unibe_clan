@@ -10,6 +10,7 @@
         services.tailscale.enable = true;
         services.tailscale.authKeyFile =
           config.clan.core.vars.generators.tailscale-auth-key.files.auth-key.path;
+        services.tailscale.extraUpFlags = ["--ssh"];
         networking.firewall.allowedUDPPorts = [config.services.tailscale.port];
       };
     };

@@ -1029,7 +1029,7 @@
         "fpu_exception": false,
         "cpuid_level": 22,
         "write_protect": false,
-        "tlb_size": 32765,
+        "tlb_size": 32764,
         "clflush_size": 64,
         "cache_alignment": 64,
         "address_sizes": {
@@ -2055,9 +2055,9 @@
           "value": 5571
         },
         "device": {
-          "hex": "3397",
+          "hex": "3395",
           "name": "EV3240X",
-          "value": 13207
+          "value": 13205
         },
         "serial": "22645063",
         "model": "EIZO EV3240X",
@@ -2085,7 +2085,7 @@
           },
           {
             "type": "monitor",
-            "width": 1920,
+            "width": 3840,
             "height": 2160,
             "vertical_frequency": 60,
             "interlaced": false
@@ -2114,7 +2114,7 @@
           {
             "type": "size",
             "unit": "mm",
-            "value_1": 349,
+            "value_1": 697,
             "value_2": 392
           }
         ],
@@ -2127,33 +2127,33 @@
           },
           "horizontal_sync": {
             "min": 31,
-            "max": 134
+            "max": 136
           },
           "horizontal_sync_timings": {
-            "disp": 1920,
-            "sync_start": 1968,
-            "sync_end": 2000,
-            "total": 2080
+            "disp": 3840,
+            "sync_start": 4016,
+            "sync_end": 4104,
+            "total": 4400
           },
           "vertical_sync_timings": {
             "disp": 2160,
-            "sync_start": 2163,
-            "sync_end": 2173,
-            "total": 2222
+            "sync_start": 2168,
+            "sync_end": 2178,
+            "total": 2250
           },
-          "clock": 277250,
-          "width": 1920,
+          "clock": 594000,
+          "width": 3840,
           "height": 2160,
-          "width_millimetres": 349,
+          "width_millimetres": 697,
           "height_millimetres": 392,
-          "horizontal_flag": 45,
+          "horizontal_flag": 43,
           "vertical_flag": 43,
           "vendor": "",
           "name": "EV3240X"
         },
         "driver_info": {
           "type": "display",
-          "width": 1920,
+          "width": 3840,
           "height": 2160,
           "vertical_sync": {
             "min": 29,
@@ -2161,22 +2161,22 @@
           },
           "horizontal_sync": {
             "min": 31,
-            "max": 134
+            "max": 136
           },
           "bandwidth": 0,
           "horizontal_sync_timings": {
-            "disp": 1920,
-            "sync_start": 1968,
-            "sync_end": 2000,
-            "total": 2080
+            "disp": 3840,
+            "sync_start": 4016,
+            "sync_end": 4104,
+            "total": 4400
           },
           "vertical_sync_timings": {
             "disp": 2160,
-            "sync_start": 2163,
-            "sync_end": 2173,
-            "total": 2222
+            "sync_start": 2168,
+            "sync_end": 2178,
+            "total": 2250
           },
-          "horizontal_flag": 45,
+          "horizontal_flag": 43,
           "vertical_flag": 43
         }
       }
@@ -2978,7 +2978,7 @@
         "sysfs_bus_id": "0000:00:1f.2",
         "detail": {
           "function": 2,
-          "command": 0,
+          "command": 6,
           "header_type": 0,
           "secondary_bus": 0,
           "prog_if": 0
@@ -7411,7 +7411,7 @@
         "sysfs_bus_id": "0000:00:14.2",
         "detail": {
           "function": 2,
-          "command": 2,
+          "command": 6,
           "header_type": 0,
           "secondary_bus": 0,
           "prog_if": 0

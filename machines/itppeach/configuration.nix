@@ -64,37 +64,83 @@ in {
 
         # Create datasets for new users
         ${builtins.concatStringsSep "\n" (map (user: ''
-          # Check if user exists in system before proceeding
-          if ! id ${user.name} >/dev/null 2>&1; then
-            echo "User ${user.name} does not exist yet, skipping dataset creation"
-            continue
-          fi
+                    # Check if user exists in system before proceeding
+                    if ! id ${user.name} >/dev/null 2>&1; then
+                      echo "User ${user.name} does not exist yet, skipping dataset creation"
+                      continue
+                    fi
 
-          if ! ${pkgs.zfs}/bin/zfs list zroot/local/home/${user.name} >/dev/null 2>&1; then
-            echo "Creating ZFS dataset for user ${user.name}..."
-            ${pkgs.zfs}/bin/zfs create -o refquota=50G -o compression=lz4 -o mountpoint=/home/${user.name} zroot/local/home/${user.name} || {
-              echo "Failed to create dataset for ${user.name}"
-              continue
-            }
+                    if ! ${pkgs.zfs}/bin/zfs list zroot/local/home/${user.name} >/dev/null 2>&1; then
+                      echo "Creating ZFS dataset for user ${user.name}..."
+                      ${pkgs.zfs}/bin/zfs create -o refquota=50G -o compression=lz4 -o mountpoint=/home/${user.name} zroot/local/home/${user.name} || {
+                        echo "Failed to create dataset for ${user.name}"
+                        continue
+                      }
 
-            # Wait for mount to complete
-            sleep 2
-          fi
+                      # Wait for mount to complete
+                      sleep 2
+                    fi
 
-          # Always fix permissions (for both new and existing datasets)
-          echo "Setting proper ownership and permissions for ${user.name}..."
+                    # Always fix permissions (for both new and existing datasets)
+                    echo "Setting proper ownership and permissions for ${user.name}..."
 
-          # Set home directory ownership and permissions
-          chown ${user.name}:users /home/${user.name} 2>/dev/null || echo "Warning: Could not set ownership for /home/${user.name}"
-          chmod 755 /home/${user.name} 2>/dev/null || echo "Warning: Could not set permissions for /home/${user.name}"
+                    # Set home directory ownership and permissions
+                    chown ${user.name}:users /home/${user.name} 2>/dev/null || echo "Warning: Could not set ownership for /home/${user.name}"
+                    chmod 755 /home/${user.name} 2>/dev/null || echo "Warning: Could not set permissions for /home/${user.name}"
 
-          # Create essential directories with proper ownership
-          mkdir -p /home/${user.name}/.config /home/${user.name}/.local/share /home/${user.name}/.cache
-          chown -R ${user.name}:users /home/${user.name}/.config /home/${user.name}/.local /home/${user.name}/.cache 2>/dev/null || echo "Warning: Could not set ownership for user directories"
-          chmod -R 755 /home/${user.name}/.config /home/${user.name}/.local /home/${user.name}/.cache 2>/dev/null || echo "Warning: Could not set permissions for user directories"
+                    # Create essential directories with proper ownership
+                    mkdir -p /home/${user.name}/.config /home/${user.name}/.local/share /home/${user.name}/.cache
+                    chown -R ${user.name}:users /home/${user.name}/.config /home/${user.name}/.local /home/${user.name}/.cache 2>/dev/null || echo "Warning: Could not set ownership for user directories"
+                    chmod -R 755 /home/${user.name}/.config /home/${user.name}/.local /home/${user.name}/.cache 2>/dev/null || echo "Warning: Could not set permissions for user directories"
 
-          # Fix any existing files that might be owned by root
-          find /home/${user.name} -user root -exec chown ${user.name}:users {} \; 2>/dev/null || true
+                    # Fix any existing files that might be owned by root
+                    find /home/${user.name} -user root -exec chown ${user.name}:users {} \; 2>/dev/null || true
+
+                    # Set up Home Manager config if it doesn't exist
+                    HM_CONFIG_DIR="/home/${user.name}/.config/home-manager"
+                    if [ ! -f "$HM_CONFIG_DIR/home.nix" ]; then
+                      echo "Setting up Home Manager config for ${user.name}..."
+                      mkdir -p "$HM_CONFIG_DIR"
+
+                      # Create home.nix from template
+                      if [ -r /etc/home-manager-templates/default-standalone-home.nix ]; then
+                        ${pkgs.gnused}/bin/sed 's/USERNAME_PLACEHOLDER/${user.name}/g' /etc/home-manager-templates/default-standalone-home.nix > "$HM_CONFIG_DIR/home.nix"
+
+                        # Create flake.nix
+                        cat > "$HM_CONFIG_DIR/flake.nix" << 'EOF'
+          {
+            description = "Home Manager configuration for ${user.name}";
+
+            inputs = {
+              nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+              home-manager.url = "github:nix-community/home-manager";
+              home-manager.inputs.nixpkgs.follows = "nixpkgs";
+            };
+
+            outputs = { nixpkgs, home-manager, ... }: {
+              homeConfigurations."${user.name}" = home-manager.lib.homeManagerConfiguration {
+                pkgs = nixpkgs.legacyPackages.x86_64-linux;
+                modules = [ ./home.nix ];
+              };
+            };
+          }
+          EOF
+
+                        # Create .gitignore
+                        cat > "$HM_CONFIG_DIR/.gitignore" << 'EOF'
+          result
+          result-*
+          EOF
+
+                        # Set proper ownership
+                        chown -R ${user.name}:users "$HM_CONFIG_DIR" 2>/dev/null || echo "Warning: Could not set ownership for Home Manager config"
+                        chmod -R 755 "$HM_CONFIG_DIR" 2>/dev/null || echo "Warning: Could not set permissions for Home Manager config"
+
+                        echo "✅ Created Home Manager config for ${user.name}"
+                      else
+                        echo "Warning: Home Manager template not found for ${user.name}"
+                      fi
+                    fi
         '')
         userData.users)}
 
@@ -260,6 +306,7 @@ in {
     pkgs.ipmitool
     pkgs.zfs
     pkgs.rsync
+    pkgs.gnused
   ];
 
   # Set mercury as the default user for local login and emergency console

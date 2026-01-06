@@ -107,5 +107,13 @@ in {
         adminSshKey
       ];
     }
+    {
+      name = "bobby";
+      isNormalUser = true;
+      uid = 1110;
+      extraGroups = ["nfs"];
+      sshKeys = [
+      ];
+    }
   ];
 }

@@ -6,9 +6,9 @@
   ...
 }: let
   userData = import ../user-list.nix;
-  defaultHomeConfig = ../users/default/home.nix;
 in {
   imports = [
+    ./user-management.nix
   ];
 
   # Configure Nix for flake-based systems
@@ -47,19 +47,12 @@ in {
   environment.systemPackages = with pkgs; [
     tailscale
     btop
-    # Home Manager for self-managed users
-    home-manager
-    # Script to help users set up standalone Home Manager
-    (pkgs.writeShellScriptBin "setup-home-manager" (builtins.readFile ../scripts/setup-home-manager.sh))
   ];
 
   # Make Home Manager templates available to users
   environment.etc."home-manager-templates/default-standalone-home.nix".source = ../home-manager-templates/default-standalone-home.nix;
   environment.etc."home-manager-templates/advanced-home.nix".source = ../home-manager-templates/advanced-home.nix;
   environment.etc."home-manager-templates/README.md".source = ../home-manager-templates/README.md;
-
-  # Enable fish shell system-wide
-  programs.fish.enable = true;
 
   clan.core.vars.generators.tailscale-auth-key = {
     share = true;
@@ -92,26 +85,6 @@ in {
     # };
   };
 
-  # Home Manager configuration - only for users who don't manage their own
-  home-manager = {
-    useGlobalPkgs = true;
-    useUserPackages = true;
-    backupFileExtension = "backup";
-    users = let
-      # Only configure users who don't have standalone home-manager
-      managedUsers = lib.filter (u: !(u ? standaloneHomeManager && u.standaloneHomeManager)) userData.users;
-      homeManagerUsers =
-        lib.genAttrs
-        (map (u: u.name) managedUsers)
-        (userName: let
-          userSpec = lib.findFirst (u: u.name == userName) null userData.users;
-          homeConfig =
-            if userSpec ? homeManagerFile && userSpec.homeManagerFile != null
-            then userSpec.homeManagerFile
-            else defaultHomeConfig;
-        in
-          import homeConfig);
-    in
-      homeManagerUsers;
-  };
+  # Users now manage their own Home Manager configurations
+  # All users get a .config/home-manager setup via the user-management module
 }

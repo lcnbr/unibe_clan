@@ -1973,7 +1973,7 @@
           {
             "type": "mem",
             "base": 0,
-            "range": 66977775616,
+            "range": 66977792000,
             "enabled": true,
             "access": "read_write",
             "prefetch": "unknown"
@@ -2571,6 +2571,29 @@
     "network_interface": [
       {
         "index": 144,
+        "attached_to": 0,
+        "class_list": [
+          "network_interface"
+        ],
+        "base_class": {
+          "hex": "0107",
+          "name": "Network Interface",
+          "value": 263
+        },
+        "sub_class": {
+          "hex": "0000",
+          "name": "Loopback",
+          "value": 0
+        },
+        "model": "Loopback network interface",
+        "sysfs_id": "/class/net/lo",
+        "unix_device_name": "lo",
+        "unix_device_names": [
+          "lo"
+        ]
+      },
+      {
+        "index": 145,
         "attached_to": 62,
         "class_list": [
           "network_interface"
@@ -2609,29 +2632,6 @@
         ],
         "driver_modules": [
           "igb"
-        ]
-      },
-      {
-        "index": 145,
-        "attached_to": 0,
-        "class_list": [
-          "network_interface"
-        ],
-        "base_class": {
-          "hex": "0107",
-          "name": "Network Interface",
-          "value": 263
-        },
-        "sub_class": {
-          "hex": "0000",
-          "name": "Loopback",
-          "value": 0
-        },
-        "model": "Loopback network interface",
-        "sysfs_id": "/class/net/lo",
-        "unix_device_name": "lo",
-        "unix_device_names": [
-          "lo"
         ]
       },
       {
@@ -4925,7 +4925,7 @@
         "resources": [
           {
             "type": "irq",
-            "base": 60,
+            "base": 62,
             "triggered": 0,
             "enabled": true
           },
@@ -4943,7 +4943,7 @@
           "command": 1030,
           "header_type": 0,
           "secondary_bus": 0,
-          "irq": 60,
+          "irq": 62,
           "prog_if": 0
         },
         "driver": "mei_me",
@@ -5446,7 +5446,7 @@
         "resources": [
           {
             "type": "irq",
-            "base": 61,
+            "base": 60,
             "triggered": 0,
             "enabled": true
           },
@@ -5464,7 +5464,7 @@
           "command": 1030,
           "header_type": 0,
           "secondary_bus": 0,
-          "irq": 61,
+          "irq": 60,
           "prog_if": 0
         },
         "driver": "ioatdma",
@@ -5951,7 +5951,7 @@
         "resources": [
           {
             "type": "irq",
-            "base": 61,
+            "base": 60,
             "triggered": 0,
             "enabled": true
           },
@@ -5969,7 +5969,7 @@
           "command": 1030,
           "header_type": 0,
           "secondary_bus": 0,
-          "irq": 61,
+          "irq": 60,
           "prog_if": 0
         },
         "driver": "ioatdma",
@@ -6533,7 +6533,7 @@
         "resources": [
           {
             "type": "irq",
-            "base": 61,
+            "base": 60,
             "triggered": 0,
             "enabled": true
           },
@@ -6551,7 +6551,7 @@
           "command": 1030,
           "header_type": 0,
           "secondary_bus": 0,
-          "irq": 61,
+          "irq": 60,
           "prog_if": 0
         },
         "driver": "ioatdma",
@@ -6863,7 +6863,7 @@
         "resources": [
           {
             "type": "irq",
-            "base": 61,
+            "base": 60,
             "triggered": 0,
             "enabled": true
           },
@@ -6881,7 +6881,7 @@
           "command": 1030,
           "header_type": 0,
           "secondary_bus": 0,
-          "irq": 61,
+          "irq": 60,
           "prog_if": 0
         },
         "driver": "ioatdma",
@@ -8642,7 +8642,7 @@
         "resources": [
           {
             "type": "irq",
-            "base": 78,
+            "base": 80,
             "triggered": 0,
             "enabled": true
           },
@@ -8668,7 +8668,7 @@
           "command": 1030,
           "header_type": 0,
           "secondary_bus": 0,
-          "irq": 78,
+          "irq": 80,
           "prog_if": 0
         },
         "driver": "snd_hda_intel",
@@ -8734,7 +8734,7 @@
         "resources": [
           {
             "type": "irq",
-            "base": 71,
+            "base": 78,
             "triggered": 0,
             "enabled": true
           },
@@ -8752,7 +8752,7 @@
           "command": 262,
           "header_type": 0,
           "secondary_bus": 0,
-          "irq": 71,
+          "irq": 78,
           "prog_if": 0
         },
         "driver": "snd_hda_intel",

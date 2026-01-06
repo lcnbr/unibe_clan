@@ -1,4 +1,3 @@
-# userlist.nix
 let
   adminSshKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA3c4BHqDDrZGI6WrbwO5MEg+blmSy7igkQS+miH5roX";
 in {
@@ -81,6 +80,18 @@ in {
       name = "alice";
       isNormalUser = true;
       uid = 1107;
+      shell = "/run/current-system/sw/bin/fish";
+      extraGroups = ["nfs"];
+      sshKeys = [
+        adminSshKey
+      ];
+    }
+
+    {
+      name = "alice2";
+      isNormalUser = true;
+      uid = 1109;
+      shell = "/run/current-system/sw/bin/fish";
       extraGroups = ["nfs"];
       sshKeys = [
         adminSshKey
@@ -90,6 +101,7 @@ in {
       name = "bob";
       isNormalUser = true;
       uid = 1108;
+      shell = "/run/current-system/sw/bin/fish";
       extraGroups = ["nfs"];
       sshKeys = [
         adminSshKey

@@ -19,7 +19,7 @@ in {
     in {
       isNormalUser = true;
       uid = userSpec.uid;
-      shell = userSpec.shell or null;
+      shell = userSpec.shell or pkgs.fish;
       extraGroups = (userSpec.extraGroups or []) ++ ["users" "wheel"];
       home = "/home/${userName}";
       description = userSpec.description or "";

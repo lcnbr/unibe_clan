@@ -33,6 +33,7 @@
         "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA3c4BHqDDrZGI6WrbwO5MEg+blmSy7igkQS+miH5roX"
       ];
       homeManagerFile = ./users/lcnbr/home.nix;
+      standaloneHomeManager = true; # User manages their own Home Manager configuration
     }
 
     {

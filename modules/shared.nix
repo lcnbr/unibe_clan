@@ -44,7 +44,19 @@ in {
   services.openssh.settings.PermitRootLogin = "no";
   services.openssh.settings.DenyUsers = ["mercury"];
 
-  environment.systemPackages = with pkgs; [tailscale btop];
+  environment.systemPackages = with pkgs; [
+    tailscale
+    btop
+    # Home Manager for self-managed users
+    home-manager
+    # Script to help users set up standalone Home Manager
+    (pkgs.writeShellScriptBin "setup-home-manager" (builtins.readFile ../scripts/setup-home-manager.sh))
+  ];
+
+  # Make Home Manager templates available to users
+  environment.etc."home-manager-templates/default-standalone-home.nix".source = ../home-manager-templates/default-standalone-home.nix;
+  environment.etc."home-manager-templates/advanced-home.nix".source = ../home-manager-templates/advanced-home.nix;
+  environment.etc."home-manager-templates/README.md".source = ../home-manager-templates/README.md;
 
   # Enable fish shell system-wide
   programs.fish.enable = true;
@@ -80,16 +92,17 @@ in {
     # };
   };
 
-  # Home Manager configuration
+  # Home Manager configuration - only for users who don't manage their own
   home-manager = {
     useGlobalPkgs = true;
     useUserPackages = true;
     backupFileExtension = "backup";
     users = let
-      # Configure home-manager for all users, using their specific config or default
+      # Only configure users who don't have standalone home-manager
+      managedUsers = lib.filter (u: !(u ? standaloneHomeManager && u.standaloneHomeManager)) userData.users;
       homeManagerUsers =
         lib.genAttrs
-        (map (u: u.name) userData.users)
+        (map (u: u.name) managedUsers)
         (userName: let
           userSpec = lib.findFirst (u: u.name == userName) null userData.users;
           homeConfig =

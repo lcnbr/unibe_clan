@@ -117,23 +117,7 @@ in {
     if [[ -f ~/.config/home-manager/home.nix ]]; then
       if ! home-manager generations &>/dev/null || [[ "$(home-manager generations 2>/dev/null | wc -l)" -eq 0 ]]; then
         echo ""
-        echo "╭─────────────────────────────────────────────────────────────╮"
-        echo "│                    🏠 Home Manager Ready!                   │"
-        echo "╰─────────────────────────────────────────────────────────────╯"
-        echo ""
-        echo "Welcome! Your personal Home Manager configuration is ready."
-        echo ""
-        echo "🚀 To activate your home environment:"
-        echo "   cd ~/.config/home-manager"
-        echo "   home-manager switch --flake .#$(whoami)"
-        echo ""
-        echo "📝 After activation, customize your setup:"
-        echo "   \$EDITOR ~/.config/home-manager/home.nix"
-        echo ""
-        echo "📚 Documentation and examples:"
-        echo "   cat /etc/home-manager-templates/README.md"
-        echo ""
-        echo "Happy configuring! 🎉"
+        cat /etc/home-manager-templates/greeting.txt
         echo ""
       fi
     fi
@@ -145,40 +129,14 @@ in {
     if test -f ~/.config/home-manager/home.nix
       if not home-manager generations >/dev/null 2>&1; or test (home-manager generations 2>/dev/null | wc -l) -eq 0
         echo ""
-        echo "╭─────────────────────────────────────────────────────────────╮"
-        echo "│                    🏠 Home Manager Ready!                   │"
-        echo "╰─────────────────────────────────────────────────────────────╯"
-        echo ""
-        echo "Welcome! Your personal Home Manager configuration is ready."
-        echo ""
-        echo "🚀 To activate your home environment:"
-        echo "   cd ~/.config/home-manager"
-        echo "   home-manager switch --flake .#"(whoami)
-        echo ""
-        echo "📝 After activation, customize your setup:"
-        echo '   $EDITOR ~/.config/home-manager/home.nix'
-        echo ""
-        echo "📚 Documentation and examples:"
-        echo "   cat /etc/home-manager-templates/README.md"
-        echo ""
-        echo "Happy configuring! 🎉"
+        cat /etc/home-manager-templates/greeting.txt
         echo ""
       end
     end
   '';
 
-  # Universal MOTD as fallback - shows simple message for all users
-  environment.etc."motd".text = ''
-
-    ╭─────────────────────────────────────────────────────────────╮
-    │              Welcome to the Home Manager System!            │
-    ╰─────────────────────────────────────────────────────────────╯
-
-    📁 Your Home Manager config: ~/.config/home-manager/
-    🚀 Activate: home-manager switch --flake ~/.config/home-manager#$(whoami)
-    📚 Help: cat /etc/home-manager-templates/README.md
-
-  '';
+  # Universal MOTD as fallback - shows same message as interactive greeting
+  environment.etc."motd".source = ../home-manager-templates/greeting.txt;
 
   # Make sure home-manager is available for users
   environment.systemPackages = with pkgs; [

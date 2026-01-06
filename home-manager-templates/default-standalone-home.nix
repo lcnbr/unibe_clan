@@ -18,11 +18,13 @@
 
   # Basic packages - customize as needed
   home.packages = with pkgs; [
-    git
     helix
     htop
     tree
     curl
+    bat
+    fd
+    ripgrep
   ];
 
   # Basic program configurations
@@ -30,10 +32,22 @@
     git = {
       enable = true;
       settings = {
-        name = "Your Name"; # TODO: Change this
-        email = "your.email@example.com"; # TODO: Change this
+        user = {
+          name = "lcnbr";
+          email = "im@lcnbr.ch";
+        };
       };
     };
+
+    nh = {
+      enable = true;
+      homeFlake = "${config.xdg.configHome}/home-manager";
+    };
+
+    nix-search-tv = {
+      enable = true;
+    };
+    television.enable = true;
 
     helix.enable = true;
 
@@ -44,6 +58,24 @@
       interactiveShellInit = ''
         # Add your fish shell customizations here
         # Example: set -g fish_greeting ""  # Remove greeting
+      '';
+    };
+
+    # Bash shell (traditional, widely compatible)
+    bash = {
+      enable = true;
+      enableCompletion = true;
+      # Uncomment to set bash aliases:
+      # shellAliases = {
+      #   ll = "ls -la";
+      #   grep = "rg";
+      # };
+
+      # Automatically switch to fish when bash starts (Option 3 - enabled by default):
+      initExtra = ''
+        if [ -n "$PS1" ] && [ "$SHELL" != "$(which fish)" ] && command -v fish > /dev/null; then
+          exec fish
+        fi
       '';
     };
 
@@ -58,30 +90,9 @@
     #   - Log out and back in for the change to take effect
     #   - Run: chsh -s $(which bash) to switch back
     #
-    # Option 3: Auto-switch to fish (enabled above in bash.initExtra)
+    # Option 3: Auto-switch to fish (DEFAULT - enabled above)
     #   - Keeps bash as login shell but automatically switches to fish
     #   - Best of both worlds: compatibility + modern shell experience
-    # Bash shell (traditional, widely compatible)
-    bash = {
-      enable = true;
-      enableCompletion = true;
-      # Uncomment to set bash aliases:
-      # shellAliases = {
-      #   ll = "ls -la";
-      #   grep = "rg";
-      # };
-
-      # Automatically switch to fish when bash starts (Option 3 - enabled by default):
-      initExtra = ''
-        # Auto-switch to fish if it's available and we're in an interactive session
-        if [ -n "$PS1" ] && command -v fish > /dev/null 2>&1; then
-          # Only switch if we're not already in fish (prevent infinite loop)
-          if [ -z "$FISH_VERSION" ]; then
-            exec fish
-          fi
-        fi
-      '';
-    };
 
     direnv = {
       enable = true;

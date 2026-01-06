@@ -1,0 +1,27 @@
+╭─────────────────────────────────────────────────────────────╮
+│            🔬 Welcome to the ITP@unibe's $(hostname) server │
+│                                                             │
+│ This configuration uses Nix and Home Manager for           │
+│ declarative, reproducible, file-based system management.   │
+│ Your personal environment is ready for activation.         │
+│                                                             │
+│ 🚀 To activate your environment:                           │
+│    cd ~/.config/home-manager                               │
+│    home-manager switch --flake .#$(whoami)                 │
+│                                                             │
+│ 📝 After activation, customize your setup:                 │
+│    $EDITOR ~/.config/home-manager/home.nix                 │
+│                                                             │
+│ 💡 To install packages, add them to home.nix:             │
+│    home.packages = [ pkgs.vim pkgs.mpfr pkgs.form ];    │
+│                                                             │
+│ 🔍 Find packages: nix-env -qaP | grep <package-name>       │
+│ 📖 Home Manager options: home-manager option search        │
+│                                                             │
+│ 📚 Documentation and examples:                              │
+│    cat /etc/home-manager-templates/README.md               │
+│                                                             │
+│ 🎉 Happy configuring!                                      │
+│                                                             │
+│ Host: $(hostname) | User: $(whoami) | ITP@unibe            │
+╰─────────────────────────────────────────────────────────────╯

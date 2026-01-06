@@ -109,7 +109,7 @@ in {
       uid = 1107;
     })
     (mkUser {
-      name = "bob";
+      name = "bobby";
       uid = 1108;
     })
     (mkUser {

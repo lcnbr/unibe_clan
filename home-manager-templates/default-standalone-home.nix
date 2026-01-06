@@ -29,8 +29,10 @@
   programs = {
     git = {
       enable = true;
-      userName = "Your Name"; # TODO: Change this
-      userEmail = "your.email@example.com"; # TODO: Change this
+      settings = {
+        name = "Your Name"; # TODO: Change this
+        email = "your.email@example.com"; # TODO: Change this
+      };
     };
 
     helix.enable = true;
@@ -45,6 +47,20 @@
       '';
     };
 
+    # Shell Configuration Options:
+    #
+    # Option 1: Disable auto-switch (comment out bash.initExtra above)
+    #   - Keep bash as login shell, manually type 'fish' when needed
+    #   - Good if you prefer explicit shell switching
+    #
+    # Option 2: Change login shell permanently
+    #   - Run: chsh -s $(which fish)
+    #   - Log out and back in for the change to take effect
+    #   - Run: chsh -s $(which bash) to switch back
+    #
+    # Option 3: Auto-switch to fish (enabled above in bash.initExtra)
+    #   - Keeps bash as login shell but automatically switches to fish
+    #   - Best of both worlds: compatibility + modern shell experience
     # Bash shell (traditional, widely compatible)
     bash = {
       enable = true;
@@ -57,26 +73,15 @@
 
       # Automatically switch to fish when bash starts (Option 3 - enabled by default):
       initExtra = ''
-        if [ -n "$PS1" ] && [ "$SHELL" != "$(which fish)" ] && command -v fish > /dev/null; then
-          exec fish
+        # Auto-switch to fish if it's available and we're in an interactive session
+        if [ -n "$PS1" ] && command -v fish > /dev/null 2>&1; then
+          # Only switch if we're not already in fish (prevent infinite loop)
+          if [ -z "$FISH_VERSION" ]; then
+            exec fish
+          fi
         fi
       '';
     };
-
-    # Shell Configuration Options:
-    #
-    # Option 1: Disable auto-switch (comment out bash.initExtra above)
-    #   - Keep bash as login shell, manually type 'fish' when needed
-    #   - Good if you prefer explicit shell switching
-    #
-    # Option 2: Change login shell permanently
-    #   - Run: chsh -s $(which fish)
-    #   - Log out and back in for the change to take effect
-    #   - Run: chsh -s $(which bash) to switch back
-    #
-    # Option 3: Auto-switch to fish (DEFAULT - enabled above)
-    #   - Keeps bash as login shell but automatically switches to fish
-    #   - Best of both worlds: compatibility + modern shell experience
 
     direnv = {
       enable = true;

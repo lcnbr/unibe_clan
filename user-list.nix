@@ -108,11 +108,14 @@ in {
       ];
     }
     {
-      name = "bobby";
+      name = "charlie";
       isNormalUser = true;
-      uid = 1110;
+      uid = 1120;
+      shell = "/run/current-system/sw/bin/fish";
       extraGroups = ["nfs"];
       sshKeys = [
+        adminSshKey
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA3c4BHqDDrZGI6WrbwO5MEg+blmSy7igkQS+miH5roX charlie@test"
       ];
     }
   ];

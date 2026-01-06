@@ -97,15 +97,16 @@ in {
         adminSshKey
       ];
     }
+
     {
-      name = "charlie";
+      name = "ben";
       isNormalUser = true;
-      uid = 1120;
+      uid = 1109;
       shell = "/run/current-system/sw/bin/fish";
       extraGroups = ["nfs"];
       sshKeys = [
         adminSshKey
-        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA3c4BHqDDrZGI6WrbwO5MEg+blmSy7igkQS+miH5roX charlie@test"
+        "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCkxofZueFdq6XXYVssdROo7P9OgEfNNt6fk0uIeELWhNz6/fwIJVTVuz4dEBALh8/gCx5U/M5AOy9laExR9GQJbfxfPUn+w+eibjsBMMdIl0uRWszvfptS+lnvww9y7IFNAjr4qJ9zqxAyDI/jsfFw4WxRafvUXvr82tHAsryDr/xnejxVGAlqYsTqb828qhILobaFAAMropr60vJKZSKwiIv+kTi9Ou787IJl1CPzJ9SA9k1ljjrAFm48yEl0hQ3pUi90a4GVqBfMZcWa2JfGyiPAADc6xxQtIqGBp2mu8iBv5uYfTDo23U/t95Sz8nVlgXk8wXjln2LHBLMwFm8X ben@PC_ONDER"
       ];
     }
   ];

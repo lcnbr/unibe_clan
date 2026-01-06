@@ -174,12 +174,18 @@ in {
                 chmod -R 700 "$BACKUP_DIR" 2>/dev/null || true
               fi
 
-              # Unmount and destroy the dataset
+              # Unmount and destroy the dataset (with snapshots)
               echo "Removing ZFS dataset for deleted user: $existing_user"
               ${pkgs.zfs}/bin/zfs unmount "zroot/local/home/$existing_user" 2>/dev/null || true
-              if ${pkgs.zfs}/bin/zfs destroy "zroot/local/home/$existing_user"; then
+              if ${pkgs.zfs}/bin/zfs destroy -r "zroot/local/home/$existing_user"; then
                 echo "Successfully removed dataset for user $existing_user"
-                echo "Backup snapshot retained: $SNAPSHOT_NAME"
+                echo "All snapshots for $existing_user were also removed"
+
+                # Clean up the empty mountpoint directory
+                if [ -d "/home/$existing_user" ]; then
+                  echo "Removing empty mountpoint directory: /home/$existing_user"
+                  rm -rf "/home/$existing_user" || echo "Warning: Could not remove mountpoint directory"
+                fi
               else
                 echo "Failed to destroy dataset for user $existing_user"
               fi

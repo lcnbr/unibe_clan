@@ -44,12 +44,72 @@ in {
     userDirRules
   ];
 
+  # Activation script to clean up orphaned shared directories immediately during deployment
+  system.activationScripts.cleanupOrphanedSharedDirs = {
+    text = ''
+      echo "Checking for orphaned shared directories during activation..."
+
+      # Get current list of configured users
+      CONFIGURED_USERS=(${builtins.concatStringsSep " " (map (u: u.name) userData.users)})
+
+      # Check existing shared directories
+      if [[ -d /shared ]]; then
+        for shared_dir in /shared/*/; do
+          if [[ -d "$shared_dir" ]]; then
+            dir_name=$(basename "$shared_dir")
+
+            # Skip special directories
+            if [[ "$dir_name" == "deleted-users" ]]; then
+              continue
+            fi
+
+            # Check if this user is still configured
+            user_found=false
+            for configured_user in "''${CONFIGURED_USERS[@]}"; do
+              if [[ "$dir_name" == "$configured_user" ]]; then
+                user_found=true
+                break
+              fi
+            done
+
+            # If user not found in configuration, clean up their shared directory
+            if [[ "$user_found" == "false" ]]; then
+              echo "Activation cleanup: Orphaned shared directory found: /shared/$dir_name"
+
+              TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+
+              # Create backup of shared directory content if it exists and has files
+              if [[ "$(ls -A "/shared/$dir_name" 2>/dev/null)" ]]; then
+                SHARED_BACKUP_DIR="/shared/deleted-users/$dir_name-shared-$TIMESTAMP"
+                echo "Activation cleanup: Backing up shared directory content to $SHARED_BACKUP_DIR"
+                if mkdir -p "$SHARED_BACKUP_DIR" 2>/dev/null; then
+                  ${pkgs.rsync}/bin/rsync -av "/shared/$dir_name/" "$SHARED_BACKUP_DIR/" || echo "Shared directory backup failed"
+                  chown -R root:wheel "$SHARED_BACKUP_DIR" 2>/dev/null || true
+                  chmod -R 700 "$SHARED_BACKUP_DIR" 2>/dev/null || true
+                fi
+              fi
+
+              # Remove the shared directory
+              rm -rf "/shared/$dir_name" || echo "Warning: Could not remove shared directory /shared/$dir_name"
+              echo "Activation cleanup: Successfully removed orphaned shared directory for user $dir_name"
+            fi
+          fi
+        done
+      fi
+
+      echo "Activation cleanup of shared directories completed"
+    '';
+    deps = ["users" "groups"];
+  };
+
   # ZFS user dataset management service
   systemd.services.zfs-user-datasets = {
     description = "Manage ZFS datasets for users";
     wantedBy = ["multi-user.target"];
     after = ["zfs-import.target" "local-fs.target"];
     wants = ["zfs-import.target"];
+    # Run on every system activation to ensure cleanup happens
+    restartIfChanged = true;
 
     script = ''
       # Check if ZFS pool exists
@@ -186,6 +246,27 @@ in {
                   echo "Removing empty mountpoint directory: /home/$existing_user"
                   rm -rf "/home/$existing_user" || echo "Warning: Could not remove mountpoint directory"
                 fi
+
+                # Clean up shared directory for the deleted user
+                SHARED_DIR="/shared/$existing_user"
+                if [ -d "$SHARED_DIR" ]; then
+                  echo "Backing up and removing shared directory: $SHARED_DIR"
+
+                  # Create backup of shared directory content if it exists and has files
+                  if [ "$(ls -A "$SHARED_DIR" 2>/dev/null)" ]; then
+                    SHARED_BACKUP_DIR="/shared/deleted-users/$existing_user-shared-$TIMESTAMP"
+                    echo "Backing up shared directory content to $SHARED_BACKUP_DIR"
+                    if mkdir -p "$SHARED_BACKUP_DIR" 2>/dev/null; then
+                      ${pkgs.rsync}/bin/rsync -av "$SHARED_DIR/" "$SHARED_BACKUP_DIR/" || echo "Shared directory backup failed"
+                      chown -R root:wheel "$SHARED_BACKUP_DIR" 2>/dev/null || true
+                      chmod -R 700 "$SHARED_BACKUP_DIR" 2>/dev/null || true
+                    fi
+                  fi
+
+                  # Remove the shared directory
+                  rm -rf "$SHARED_DIR" || echo "Warning: Could not remove shared directory $SHARED_DIR"
+                  echo "Successfully removed shared directory for user $existing_user"
+                fi
               else
                 echo "Failed to destroy dataset for user $existing_user"
               fi
@@ -194,8 +275,103 @@ in {
             fi
           fi
         done
+
+        # Also check for orphaned shared directories (not tied to ZFS datasets)
+        echo "Checking for orphaned shared directories..."
+        if [[ -d /shared ]]; then
+          for shared_dir in /shared/*/; do
+            if [[ -d "$shared_dir" ]]; then
+              dir_name=$(basename "$shared_dir")
+
+              # Skip special directories
+              if [[ "$dir_name" == "deleted-users" ]]; then
+                continue
+              fi
+
+              # Check if this user is still configured
+              user_found=false
+              for configured_user in "${CONFIGURED_USERS[@]}"; do
+                if [[ "$dir_name" == "$configured_user" ]]; then
+                  user_found=true
+                  break
+                fi
+              done
+
+              # If user not found in configuration, clean up their shared directory
+              if [[ "$user_found" == "false" ]]; then
+                echo "Orphaned shared directory found: /shared/$dir_name, cleaning up..."
+
+                TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+
+                # Create backup of shared directory content if it exists and has files
+                if [[ "$(ls -A "/shared/$dir_name" 2>/dev/null)" ]]; then
+                  SHARED_BACKUP_DIR="/shared/deleted-users/$dir_name-shared-$TIMESTAMP"
+                  echo "Backing up shared directory content to $SHARED_BACKUP_DIR"
+                  if mkdir -p "$SHARED_BACKUP_DIR" 2>/dev/null; then
+                    ${pkgs.rsync}/bin/rsync -av "/shared/$dir_name/" "$SHARED_BACKUP_DIR/" || echo "Shared directory backup failed"
+                    chown -R root:wheel "$SHARED_BACKUP_DIR" 2>/dev/null || true
+                    chmod -R 700 "$SHARED_BACKUP_DIR" 2>/dev/null || true
+                  fi
+                fi
+
+                # Remove the shared directory
+                rm -rf "/shared/$dir_name" || echo "Warning: Could not remove shared directory /shared/$dir_name"
+                echo "Successfully removed orphaned shared directory for user $dir_name"
+              fi
+            fi
+          done
+        fi
       else
-        echo "ZFS dataset zroot/local/home not found, skipping dataset management"
+        echo "ZFS dataset zroot/local/home not found, skipping ZFS dataset management"
+
+        # Still check for orphaned shared directories even without ZFS
+        echo "Checking for orphaned shared directories (non-ZFS mode)..."
+        if [[ -d /shared ]]; then
+          for shared_dir in /shared/*/; do
+            if [[ -d "$shared_dir" ]]; then
+              dir_name=$(basename "$shared_dir")
+
+              # Skip special directories
+              if [[ "$dir_name" == "deleted-users" ]]; then
+                continue
+              fi
+
+              # Get current list of configured users for non-ZFS cleanup
+              CONFIGURED_USERS=(${builtins.concatStringsSep " " (map (u: u.name) userData.users)})
+
+              # Check if this user is still configured
+              user_found=false
+              for configured_user in "${CONFIGURED_USERS[@]}"; do
+                if [[ "$dir_name" == "$configured_user" ]]; then
+                  user_found=true
+                  break
+                fi
+              done
+
+              # If user not found in configuration, clean up their shared directory
+              if [[ "$user_found" == "false" ]]; then
+                echo "Orphaned shared directory found: /shared/$dir_name, cleaning up..."
+
+                TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+
+                # Create backup of shared directory content if it exists and has files
+                if [[ "$(ls -A "/shared/$dir_name" 2>/dev/null)" ]]; then
+                  SHARED_BACKUP_DIR="/shared/deleted-users/$dir_name-shared-$TIMESTAMP"
+                  echo "Backing up shared directory content to $SHARED_BACKUP_DIR"
+                  if mkdir -p "$SHARED_BACKUP_DIR" 2>/dev/null; then
+                    ${pkgs.rsync}/bin/rsync -av "/shared/$dir_name/" "$SHARED_BACKUP_DIR/" || echo "Shared directory backup failed"
+                    chown -R root:wheel "$SHARED_BACKUP_DIR" 2>/dev/null || true
+                    chmod -R 700 "$SHARED_BACKUP_DIR" 2>/dev/null || true
+                  fi
+                fi
+
+                # Remove the shared directory
+                rm -rf "/shared/$dir_name" || echo "Warning: Could not remove shared directory /shared/$dir_name"
+                echo "Successfully removed orphaned shared directory for user $dir_name"
+              fi
+            fi
+          done
+        fi
       fi
     '';
 

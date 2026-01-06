@@ -50,7 +50,7 @@ success() {
 }
 
 prompt() {
-    echo -e "${CYAN}${ARROW} $1${NC}"
+    echo -ne "${CYAN}${ARROW} $1${NC}"
 }
 
 # Validation functions
@@ -85,49 +85,53 @@ get_current_users() {
 
 show_user_details() {
     local username="$1"
-    local user_found=false
+    local in_user_block=false
+    local brace_count=0
+    local found=false
 
     echo -e "${BOLD}User Details for '$username':${NC}"
     echo "─────────────────────────────────"
 
-    # Find user block and extract details
-    local in_user_block=false
-    local brace_count=0
-
     while IFS= read -r line; do
+        # Check if this line contains our target user
         if [[ "$line" =~ name[[:space:]]*=[[:space:]]*\"$username\" ]]; then
             in_user_block=true
-            user_found=true
+            found=true
             echo -e "  ${GREEN}Name:${NC} $username"
-        elif [[ "$in_user_block" == "true" ]]; then
+            continue
+        fi
+
+        if [[ "$in_user_block" == "true" ]]; then
             # Count braces to track block boundaries
-            local open_braces=$(echo "$line" | grep -o '{' | wc -l || true)
-            local close_braces=$(echo "$line" | grep -o '}' | wc -l || true)
+            local open_braces=$(echo "$line" | grep -o '{' | wc -l || echo 0)
+            local close_braces=$(echo "$line" | grep -o '}' | wc -l || echo 0)
             brace_count=$((brace_count + open_braces - close_braces))
 
-            # Extract other user properties
+            # Extract user properties
             if [[ "$line" =~ uid[[:space:]]*=[[:space:]]*([0-9]+) ]]; then
                 echo -e "  ${GREEN}UID:${NC} ${BASH_REMATCH[1]}"
-            elif [[ "$line" =~ description[[:space:]]*=[[:space:]]*\"([^\"]+)\" ]]; then
-                echo -e "  ${GREEN}Description:${NC} ${BASH_REMATCH[1]}"
-            elif [[ "$line" =~ shell[[:space:]]*=[[:space:]]*([^;]+) ]]; then
+            elif [[ "$line" =~ shell[[:space:]]*=[[:space:]]*\"([^\"]+)\" ]]; then
                 echo -e "  ${GREEN}Shell:${NC} ${BASH_REMATCH[1]}"
+            elif [[ "$line" =~ shell[[:space:]]*=[[:space:]]*([^;]+) ]]; then
+                local shell_value="${BASH_REMATCH[1]}"
+                shell_value=$(echo "$shell_value" | sed 's/[[:space:]]*$//' | sed 's/pkgs\.//')
+                echo -e "  ${GREEN}Shell:${NC} $shell_value"
             elif [[ "$line" =~ extraGroups[[:space:]]*=[[:space:]]*\[(.*)\] ]]; then
                 local groups="${BASH_REMATCH[1]}"
-                groups=$(echo "$groups" | sed 's/"//g' | sed 's/[[:space:]]*//g')
-                echo -e "  ${GREEN}Extra Groups:${NC} $groups"
+                groups=$(echo "$groups" | sed 's/"//g' | sed 's/[[:space:]]*//g' | sed 's/,/, /g')
+                echo -e "  ${GREEN}Extra Groups:${NC} [$groups]"
             elif [[ "$line" =~ sshKeys[[:space:]]*=[[:space:]]*\[ ]]; then
                 echo -e "  ${GREEN}SSH Keys:${NC} [configured]"
             fi
 
-            # End of user block
+            # End of user block when braces are balanced
             if [[ $brace_count -le 0 ]]; then
                 break
             fi
         fi
     done < "$USER_LIST_FILE"
 
-    if [[ "$user_found" == "false" ]]; then
+    if [[ "$found" == "false" ]]; then
         echo -e "  ${RED}User not found in configuration${NC}"
         return 1
     fi
@@ -136,18 +140,18 @@ show_user_details() {
 }
 
 select_user_to_remove() {
-    local users=()
     local user_list
-
     user_list=$(get_current_users)
+
     if [[ -z "$user_list" ]]; then
         error "No users found in configuration"
         return 1
     fi
 
     # Convert to array
+    local users=()
     while IFS= read -r user; do
-        users+=("$user")
+        [[ -n "$user" ]] && users+=("$user")
     done <<< "$user_list"
 
     echo -e "${BOLD}Current Users:${NC}"
@@ -192,34 +196,33 @@ select_user_to_remove() {
 }
 
 ask_backup_options() {
-    local create_backup=false
-    local backup_file=""
-
     echo -e "${BOLD}Backup Options:${NC}"
     echo
     prompt "Create backup of user-list.nix before changes? (Y/n): "
     read -r backup_response
 
-    if [[ ! "$backup_response" =~ ^[Nn]$ ]]; then
-        create_backup=true
-
-        local default_backup="user-list.backup.$(date +%Y%m%d-%H%M%S).nix"
-        prompt "Backup filename (default: $default_backup): "
-        read -r backup_input
-
-        if [[ -z "$backup_input" ]]; then
-            backup_file="$default_backup"
-        else
-            backup_file="$backup_input"
-        fi
-
-        # Ensure .nix extension
-        if [[ ! "$backup_file" =~ \.nix$ ]]; then
-            backup_file="${backup_file}.nix"
-        fi
+    if [[ "$backup_response" =~ ^[Nn]$ ]]; then
+        echo "false|"
+        return
     fi
 
-    echo "$create_backup|$backup_file"
+    local default_backup="user-list.backup.$(date +%Y%m%d-%H%M%S).nix"
+    prompt "Backup filename (default: $default_backup): "
+    read -r backup_input
+
+    local backup_file
+    if [[ -z "$backup_input" ]]; then
+        backup_file="$default_backup"
+    else
+        backup_file="$backup_input"
+    fi
+
+    # Ensure .nix extension
+    if [[ ! "$backup_file" =~ \.nix$ ]]; then
+        backup_file="${backup_file}.nix"
+    fi
+
+    echo "true|$backup_file"
 }
 
 show_removal_plan() {
@@ -286,18 +289,21 @@ perform_removal() {
     local block_end_line=$user_start_line
     local total_lines
     total_lines=$(wc -l < "$USER_LIST_FILE")
-    local brace_count=0
+    local brace_count=1  # Start with 1 since we found opening brace
 
+    ((block_end_line++))  # Move past the name line
     while [[ $block_end_line -le $total_lines ]]; do
         local line
         line=$(sed -n "${block_end_line}p" "$USER_LIST_FILE")
-        # Count opening braces
-        brace_count=$((brace_count + $(echo "$line" | grep -o '{' | wc -l || echo 0)))
-        # Count closing braces
-        brace_count=$((brace_count - $(echo "$line" | grep -o '}' | wc -l || echo 0)))
 
-        # If we've closed all braces, we found the end
-        if [[ $brace_count -eq 0 && $block_end_line -gt $user_start_line ]]; then
+        # Count braces
+        local open_count=$(echo "$line" | grep -o '{' | wc -l || echo 0)
+        local close_count=$(echo "$line" | grep -o '}' | wc -l || echo 0)
+
+        brace_count=$((brace_count + open_count - close_count))
+
+        # If braces are balanced, we found the end
+        if [[ $brace_count -eq 0 ]]; then
             break
         fi
         ((block_end_line++))
@@ -348,7 +354,7 @@ show_next_steps() {
     echo -e "   ${CYAN}clan machines update <machine-name>${NC}"
     echo
     echo -e "${BLUE}3.${NC} Verify user data backups:"
-    echo -e "   ${CYAN}ssh <machine> 'zfs list -t snapshot | grep deleted'${NC}"
+    echo -e "   ${CYAN}ssh <machine> 'sudo zfs list -t snapshot | grep deleted'${NC}"
     echo -e "   ${CYAN}ssh <machine> 'ls -la /shared/deleted-users/'${NC}"
     echo
     warning "Remember: ZFS snapshots will be cleaned up automatically after 30 days"
@@ -382,10 +388,10 @@ main() {
     echo
 
     # Backup options
-    local backup_options
-    backup_options=$(ask_backup_options)
-    local create_backup="${backup_options%%|*}"
-    local backup_file="${backup_options##*|}"
+    local backup_info
+    backup_info=$(ask_backup_options)
+    local create_backup="${backup_info%%|*}"
+    local backup_file="${backup_info##*|}"
 
     if [[ "$create_backup" == "false" ]]; then
         backup_file=""

@@ -88,16 +88,6 @@ in {
     }
 
     {
-      name = "alice2";
-      isNormalUser = true;
-      uid = 1109;
-      shell = "/run/current-system/sw/bin/fish";
-      extraGroups = ["nfs"];
-      sshKeys = [
-        adminSshKey
-      ];
-    }
-    {
       name = "bob";
       isNormalUser = true;
       uid = 1108;

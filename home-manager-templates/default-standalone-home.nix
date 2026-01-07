@@ -99,19 +99,61 @@
       enable = true;
       settings = {
         # Add newline at start of prompt
-        format = "$all$nix_shell$character";
+        format = "$all$nix_shell$custom$character";
 
         # Right prompt showing VCS status
         right_format = "$git_branch$git_status";
 
-        # Nix shell indicator
+        # Nix shell indicator - shows traditional nix-shell environments
+        # For nix develop, see custom.nix_develop below
         nix_shell = {
-          format = "[$symbol$state( \($name\))]($style) ";
+          format = "[$symbol$state]($style) ";
           symbol = "❄️ ";
           style = "bold blue";
-          impure_msg = "[impure shell](bold red)";
-          pure_msg = "[pure shell](bold green)";
-          unknown_msg = "[unknown shell](bold yellow)";
+          impure_msg = ""; # Hide for nix develop, show with custom module
+          pure_msg = "pure";
+          unknown_msg = "nix";
+          heuristic = false;
+        };
+
+        # Custom command to detect nix develop and show flake info
+        # This distinguishes between:
+        # - nix-shell: shows ❄️ (handled by nix_shell above)
+        # - nix develop: shows 🚀 with flake name (handled here)
+        # Environment variables checked:
+        # - NIX_BUILD_TOP: present in nix develop
+        # - IN_NIX_SHELL=impure: typical for nix develop
+        # - name, FLAKE_INFO_NAME, PWD: sources for flake name
+        custom.nix_develop = {
+          description = "Nix develop environment with flake info";
+          command = ''
+            if [ -n "$IN_NIX_SHELL" ]; then
+              # Check if we're in nix develop (has NIX_BUILD_TOP) vs nix-shell
+              if [ -n "$NIX_BUILD_TOP" ] || [ "$IN_NIX_SHELL" = "impure" ]; then
+                # This is likely nix develop
+                FLAKE_NAME=""
+                # Try multiple ways to get flake name
+                if [ -n "$FLAKE_INFO_NAME" ]; then
+                  FLAKE_NAME="$FLAKE_INFO_NAME"
+                elif [ -n "$name" ] && [ "$name" != "nix-shell" ]; then
+                  FLAKE_NAME="$name"
+                elif [ -f "flake.nix" ]; then
+                  FLAKE_NAME="$(basename "$PWD")"
+                elif [ -n "$PRJ_ROOT" ]; then
+                  FLAKE_NAME="$(basename "$PRJ_ROOT")"
+                fi
+
+                if [ -n "$FLAKE_NAME" ]; then
+                  echo "🚀 $FLAKE_NAME"
+                else
+                  echo "🚀 dev"
+                fi
+              fi
+            fi
+          '';
+          when = ''[ -n "$IN_NIX_SHELL" ] && ([ -n "$NIX_BUILD_TOP" ] || [ "$IN_NIX_SHELL" = "impure" ])'';
+          style = "bold purple";
+          format = "[$output]($style) ";
         };
 
         # Git branch configuration

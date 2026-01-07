@@ -105,7 +105,7 @@ in {
       personalKeys = [userSshKeys.simone];
     })
     (mkUser {
-      name = "alicia";
+      name = "alice";
       uid = 1107;
     })
     (mkUser {

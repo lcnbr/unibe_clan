@@ -93,5 +93,79 @@
       enable = true;
       nix-direnv.enable = true;
     };
+
+    # Starship prompt configuration
+    starship = {
+      enable = true;
+      settings = {
+        # Add newline at start of prompt
+        format = "$all$nix_shell$character";
+
+        # Right prompt showing VCS status
+        right_format = "$git_branch$git_status";
+
+        # Nix shell indicator
+        nix_shell = {
+          format = "[$symbol$state( \($name\))]($style) ";
+          symbol = "❄️ ";
+          style = "bold blue";
+          impure_msg = "[impure shell](bold red)";
+          pure_msg = "[pure shell](bold green)";
+          unknown_msg = "[unknown shell](bold yellow)";
+        };
+
+        # Git branch configuration
+        git_branch = {
+          format = "[$symbol$branch]($style)";
+          symbol = " ";
+          style = "bold purple";
+        };
+
+        # Git status configuration
+        git_status = {
+          format = "([$all_status$ahead_behind]($style))";
+          style = "bold red";
+          conflicted = "⚡";
+          ahead = "⇡";
+          behind = "⇣";
+          diverged = "⇕";
+          untracked = "?";
+          stashed = "$";
+          modified = "!";
+          staged = "+";
+          renamed = "»";
+          deleted = "✘";
+        };
+
+        # Character configuration (prompt symbol)
+        character = {
+          success_symbol = "[➜](bold green)";
+          error_symbol = "[➜](bold red)";
+          vicmd_symbol = "[V](bold yellow)";
+        };
+
+        # Directory configuration
+        directory = {
+          format = "[$path]($style)[$read_only]($read_only_style) ";
+          style = "bold cyan";
+          read_only = "🔒";
+          truncation_length = 3;
+          truncate_to_repo = true;
+        };
+
+        # Show hostname when connected via SSH
+        hostname = {
+          ssh_only = true;
+          format = "[$hostname](bold yellow) ";
+        };
+
+        # Username configuration
+        username = {
+          show_always = false;
+          format = "[$user]($style) ";
+          style_user = "bold dimmed blue";
+        };
+      };
+    };
   };
 }

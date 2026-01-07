@@ -11,9 +11,9 @@ let
   #   - Admin users additionally get: wheel group (sudo access)
   #
   # Shell Policy:
-  #   - Default shell is bash to prevent conflicts with Home Manager
-  #   - Users can configure fish/zsh/etc. via Home Manager after login
-  #   - Only mercury uses fish directly (system user with special needs)
+  #   - Default shell is fish for modern shell experience
+  #   - Users can customize fish configuration via Home Manager
+  #   - All users get fish by default (consistent experience)
   #
   # Example:
   #   (mkUser { name = "newuser"; uid = 1200; personalKeys = [userSshKeys.newuser]; })
@@ -36,7 +36,7 @@ let
     name,
     uid,
     # Optional overrides
-    shell ? "/run/current-system/sw/bin/bash",
+    shell ? "/run/current-system/sw/bin/fish",
     extraGroups ? ["nfs"],
     adminAccess ? false,
     personalKeys ? [],
@@ -109,7 +109,7 @@ in {
       uid = 1107;
     })
     (mkUser {
-      name = "bob";
+      name = "bobby";
       uid = 1108;
     })
     (mkUser {

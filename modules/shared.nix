@@ -52,7 +52,6 @@ in {
 
   # Make Home Manager templates available to users
   environment.etc."home-manager-templates/default-standalone-home.nix".source = ../home-manager-templates/default-standalone-home.nix;
-
   environment.etc."home-manager-templates/README.md".source = ../home-manager-templates/README.md;
   environment.etc."home-manager-templates/greeting.txt".source = ../home-manager-templates/greeting.txt;
 

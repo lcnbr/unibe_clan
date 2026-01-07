@@ -1,107 +1,169 @@
-# Simple Home Manager Setup
+# Home Manager User Environment
 
-This guide shows you how to manage your own user environment with Home Manager.
+Welcome to your personal user environment management system! This setup automatically provides you with Home Manager configurations so you can customize your environment without affecting the system or other users.
 
-## Quick Start
+## How It Works
 
-1. **Initialize your configuration:**
-   ```bash
-   setup-home-manager
-   ```
+When you first log in, the system automatically:
+1. **Creates your Home Manager configuration** in `~/.config/home-manager/`
+2. **Shows you a greeting** with next steps (only when config exists but isn't activated)
+3. **Provides both Fish and Bash shells** with custom greeting integration
 
-2. **Edit your settings:**
-   ```bash
-   cd ~/.config/home-manager
-   $EDITOR home.nix
-   ```
+The greeting message appears in your shell until you activate Home Manager - then it disappears automatically.
 
-3. **Apply changes:**
-   ```bash
-   nh home switch
-   ```
+## Getting Started
 
-That's it! Your changes apply immediately without system rebuilds.
+### Step 1: Activate Your Configuration
 
-## What You Can Do
-
-- **Install packages**: Add to `home.packages = with pkgs; [ ... ];`
-- **Configure programs**: Use `programs.git.enable = true;` etc.
-- **Manage dotfiles**: Use `home.file` to manage config files
-- **Set environment**: Use `home.sessionVariables`
-
-## Basic Configuration Example
-
-```nix
-{ config, pkgs, ... }: {
-  home.username = builtins.getEnv "USER";
-  home.homeDirectory = builtins.getEnv "HOME";
-  home.stateVersion = "25.05";
-  programs.home-manager.enable = true;
-
-  # Install packages
-  home.packages = with pkgs; [
-    firefox
-    python3
-    nodejs
-  ];
-
-  # Configure programs
-  programs = {
-    git = {
-      enable = true;
-      userName = "Your Name";
-      userEmail = "your.email@example.com";
-    };
-
-    helix.enable = true;
-    
-    direnv = {
-      enable = true;
-      nix-direnv.enable = true;
-    };
-  };
-
-  # Environment variables
-  home.sessionVariables = {
-    EDITOR = "helix";
-  };
-}
-```
-
-## Common Commands
+Your configuration is already created! Just activate it:
 
 ```bash
-# Apply configuration
+nh home switch .config/home-manager -b backup
+```
+
+### Step 2: Customize Your Environment
+
+Edit your personal configuration:
+
+```bash
+cd ~/.config/home-manager
+$EDITOR home.nix
+```
+
+### Step 3: Apply Changes
+
+Whenever you make changes:
+
+```bash
+nh home switch
+```
+
+That's it! Changes apply immediately without system rebuilds or sudo.
+
+## What's Already Set Up
+
+Your `~/.config/home-manager/` directory contains:
+- **`home.nix`** - Your personal configuration (generated from template)
+- **`flake.nix`** - Nix flake definition for your setup
+- **`.gitignore`** - Ignores build results
+
+## Shell Integration
+
+- **Fish Shell**: Default shell with custom `fish_greeting` function
+- **Bash**: Also available with greeting integration
+- **Automatic Greeting**: Shows setup instructions until Home Manager is activated
+- **Debug Tool**: Use `check-hm-greeting` to troubleshoot greeting behavior
+
+## What You Can Customize
+
+### Install Personal Packages
+```nix
+home.packages = with pkgs; [
+  python3
+  nodejs
+  ripgrep
+  fd
+];
+```
+
+### Configure Programs
+```nix
+programs = {
+  git = {
+    enable = true;
+    userName = "Your Name";
+    userEmail = "your.email@example.com";
+  };
+
+  fish = {
+    enable = true;
+    shellAliases = {
+      ll = "ls -la";
+      ".." = "cd ..";
+      grep = "rg";
+    };
+    functions = {
+      mkcd = "mkdir -p $argv[1]; and cd $argv[1]";
+    };
+  };
+
+  helix = {
+    enable = true;
+    defaultEditor = true;
+  };
+  
+  direnv = {
+    enable = true;
+    nix-direnv.enable = true;
+  };
+};
+```
+
+### Manage Dotfiles
+```nix
+home.file = {
+  ".config/starship.toml".text = ''
+    format = "$username$hostname$directory$git_branch$character"
+    [character]
+    success_symbol = "[➜](bold green)"
+  '';
+};
+```
+
+### Set Environment Variables
+```nix
+home.sessionVariables = {
+  EDITOR = "helix";
+  BROWSER = "firefox";
+  PAGER = "less";
+};
+```
+
+
+## Useful Commands
+
+```bash
+# Apply your configuration
 nh home switch
 
-# Check for errors
-cd ~/.config/home-manager && nix flake check
+# Search for packages
+nh search package-name
 
-# Update packages
+# Update your packages
 cd ~/.config/home-manager && nix flake update
 
-# List generations (for rollback)
+# Check configuration for errors
+cd ~/.config/home-manager && nix flake check
+
+# See your Home Manager generations (for rollback)
 home-manager generations
 ```
 
-## Finding Packages
+## Troubleshooting
 
-Search for available packages:
+### Configuration Errors
 ```bash
-nh search package-name
+# Check for syntax errors
+cd ~/.config/home-manager && nix flake check
+
+# See detailed error messages
+cd ~/.config/home-manager && nh home switch --show-trace
 ```
 
-## Getting Help
+## Version Control Your Config
 
-- Home Manager manual: https://nix-community.github.io/home-manager/
-- Available options: https://home-manager-options.extranix.com/
-- Search packages: https://search.nixos.org/packages
+It's recommended to version control your personal configuration:
 
-## Tips
+```bash
+cd ~/.config/home-manager
+git init
+git add .
+git commit -m "Initial Home Manager configuration"
+```
 
-- Start simple and add complexity gradually
-- Use version control: `git init` in your config directory
-- Test changes frequently with `nh home switch`
-- Check the advanced template for more examples
+## Finding More Options
 
-Your Home Manager configuration is completely independent from the system - you can update it anytime without affecting other users!
+- **Home Manager Manual**: https://nix-community.github.io/home-manager/
+- **All Available Options**: https://home-manager-options.extranix.com/
+- **Package Search**: https://search.nixos.org/packages
+- **NixOS Options**: https://search.nixos.org/options

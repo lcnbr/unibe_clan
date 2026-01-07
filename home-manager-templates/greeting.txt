@@ -5,8 +5,8 @@
 This configuration uses Nix and Home Manager for declarative, reproducible,
 file-based system management. Your personal environment is ready for activation.
 
-🚀 To activate your environment:
-   nh home switch .config/home-manager
+🚀 To activate your environment for the first time, run:
+   nh home switch .config/home-manager -b backup
 
 📝 After activation, customize your setup:
    $EDITOR ~/.config/home-manager/home.nix

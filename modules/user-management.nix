@@ -125,12 +125,15 @@ in {
 
   # Also create Fish-specific greeting
   programs.fish.interactiveShellInit = ''
-    # Show Home Manager greeting if config exists but not activated
+    # Override fish_greeting function to replace default Fish welcome message
     if test -f ~/.config/home-manager/home.nix
+      # Show Home Manager greeting if config exists but not activated
       if not home-manager generations >/dev/null 2>&1; or test (home-manager generations 2>/dev/null | wc -l) -eq 0
-        echo ""
-        sed "s/\\\$(hostname)/"(hostname)"/g; s/\\\$(whoami)/"(whoami)"/g" /etc/home-manager-templates/greeting.txt
-        echo ""
+        function fish_greeting
+          echo ""
+          sed "s/\\\$(hostname)/"(hostname)"/g; s/\\\$(whoami)/"(whoami)"/g" /etc/home-manager-templates/greeting.txt
+          echo ""
+        end
       end
     end
   '';

@@ -47,6 +47,7 @@ in {
   environment.systemPackages = with pkgs; [
     tailscale
     btop
+    nh
   ];
 
   # Make Home Manager templates available to users

@@ -117,7 +117,7 @@ in {
     if [[ -f ~/.config/home-manager/home.nix ]]; then
       if ! home-manager generations &>/dev/null || [[ "$(home-manager generations 2>/dev/null | wc -l)" -eq 0 ]]; then
         echo ""
-        cat /etc/home-manager-templates/greeting.txt
+        sed "s/\$(hostname)/$(hostname)/g; s/\$(whoami)/$(whoami)/g" /etc/home-manager-templates/greeting.txt
         echo ""
       fi
     fi
@@ -129,7 +129,7 @@ in {
     if test -f ~/.config/home-manager/home.nix
       if not home-manager generations >/dev/null 2>&1; or test (home-manager generations 2>/dev/null | wc -l) -eq 0
         echo ""
-        cat /etc/home-manager-templates/greeting.txt
+        sed "s/\\\$(hostname)/"(hostname)"/g; s/\\\$(whoami)/"(whoami)"/g" /etc/home-manager-templates/greeting.txt
         echo ""
       end
     end

@@ -2,7 +2,10 @@
 
 <INSTRUCTIONS>
 - Use `jj` for VCS operations; do not use `git` unless explicitly requested.
-- Always run `jj describe` before making changes.
+ - To get documentation for using commands (commands using jj), look at https://jj-vcs.github.io/jj/prerelease/cli-reference/.
+ - Check what jj change is current. If starting a new task, start a new jj change with `jj new`.
+ - Update the current CL description with `jj describe -m "<description>"`.
+ - To see the changed files in a workspace `jj diff`.
 - Work with worktrees where appropriate (assume multi-worktree setups by default).
 - Use `jj` from a separate workspace/worktree for any changes in this repo.
 - This repo is a Clan (Nix) config repo; host configs live under `machines/<host>/configuration.nix`.

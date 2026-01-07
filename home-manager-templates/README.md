@@ -17,7 +17,7 @@ This guide shows you how to manage your own user environment with Home Manager.
 
 3. **Apply changes:**
    ```bash
-   home-manager switch --flake .#$(whoami)
+   nh home switch
    ```
 
 That's it! Your changes apply immediately without system rebuilds.
@@ -72,7 +72,7 @@ That's it! Your changes apply immediately without system rebuilds.
 
 ```bash
 # Apply configuration
-home-manager switch --flake ~/.config/home-manager#$(whoami)
+nh home switch
 
 # Check for errors
 cd ~/.config/home-manager && nix flake check
@@ -88,7 +88,7 @@ home-manager generations
 
 Search for available packages:
 ```bash
-nix search nixpkgs package-name
+nh search package-name
 ```
 
 ## Getting Help
@@ -101,7 +101,7 @@ nix search nixpkgs package-name
 
 - Start simple and add complexity gradually
 - Use version control: `git init` in your config directory
-- Test changes frequently with `home-manager switch`
+- Test changes frequently with `nh home switch`
 - Check the advanced template for more examples
 
 Your Home Manager configuration is completely independent from the system - you can update it anytime without affecting other users!

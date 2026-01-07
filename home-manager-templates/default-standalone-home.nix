@@ -33,8 +33,8 @@
       enable = true;
       settings = {
         user = {
-          name = "lcnbr";
-          email = "im@lcnbr.ch";
+          name = "CHANGE_ME";
+          email = "CHANGE@ME.ch";
         };
       };
     };
@@ -43,11 +43,6 @@
       enable = true;
       homeFlake = "${config.xdg.configHome}/home-manager";
     };
-
-    nix-search-tv = {
-      enable = true;
-    };
-    television.enable = true;
 
     helix.enable = true;
 
@@ -62,6 +57,21 @@
     };
 
     # Bash shell (traditional, widely compatible)
+
+    # Shell Configuration Options:
+    #
+    # Option 1: Disable auto-switch (comment out bash.initExtra above)
+    #   - Keep bash as login shell, manually type 'fish' when needed
+    #   - Good if you prefer explicit shell switching
+    #
+    # Option 2: Change login shell permanently
+    #   - Run: chsh -s $(which fish)
+    #   - Log out and back in for the change to take effect
+    #   - Run: chsh -s $(which bash) to switch back
+    #
+    # Option 3: Auto-switch to fish (DEFAULT - enabled above)
+    #   - Keeps bash as login shell but automatically switches to fish
+    #   - Best of both worlds: compatibility + modern shell experience
     bash = {
       enable = true;
       enableCompletion = true;
@@ -78,21 +88,6 @@
         fi
       '';
     };
-
-    # Shell Configuration Options:
-    #
-    # Option 1: Disable auto-switch (comment out bash.initExtra above)
-    #   - Keep bash as login shell, manually type 'fish' when needed
-    #   - Good if you prefer explicit shell switching
-    #
-    # Option 2: Change login shell permanently
-    #   - Run: chsh -s $(which fish)
-    #   - Log out and back in for the change to take effect
-    #   - Run: chsh -s $(which bash) to switch back
-    #
-    # Option 3: Auto-switch to fish (DEFAULT - enabled above)
-    #   - Keeps bash as login shell but automatically switches to fish
-    #   - Best of both worlds: compatibility + modern shell experience
 
     direnv = {
       enable = true;

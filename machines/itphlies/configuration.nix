@@ -22,7 +22,7 @@ in {
       isNormalUser = true;
       uid = userSpec.uid;
       shell = userSpec.shell or null;
-      extraGroups = (userSpec.extraGroups or []) ++ ["users" "wheel"];
+      extraGroups = (userSpec.extraGroups or []) ++ ["users"];
       home = "/home/${userName}";
       description = userSpec.description or "";
       openssh.authorizedKeys.keys = userSpec.sshKeys or [];
@@ -73,6 +73,9 @@ in {
   # Enable NVIDIA GPU support for compute workloads
   nixpkgs.config.allowUnfree = true;
   hardware.graphics.enable = true;
+
+  # Load NVIDIA driver for Xorg and Wayland
+  services.xserver.videoDrivers = ["nvidia"];
 
   # Load NVIDIA driver for compute
   boot.kernelModules = ["nvidia" "nvidia_modeset" "nvidia_uvm" "nvidia_drm"];

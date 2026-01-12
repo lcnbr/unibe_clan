@@ -21,7 +21,7 @@ in {
       isNormalUser = true;
       uid = userSpec.uid;
       shell = userSpec.shell or pkgs.fish;
-      extraGroups = (userSpec.extraGroups or []) ++ ["users" "wheel"];
+      extraGroups = (userSpec.extraGroups or []) ++ ["users"];
       home = "/home/${userName}";
       description = userSpec.description or "";
       openssh.authorizedKeys.keys = userSpec.sshKeys or [];

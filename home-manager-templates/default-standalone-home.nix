@@ -18,6 +18,10 @@
   programs.home-manager.enable = true;
 
   home.packages = with pkgs; [
+    uv
+    zellij
+    vim
+    devenv
     helix
     htop
     tree

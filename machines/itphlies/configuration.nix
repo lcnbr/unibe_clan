@@ -1,4 +1,5 @@
 {
+  config,
   lib,
   pkgs,
   ...
@@ -56,14 +57,35 @@ in {
   boot.initrd.systemd.emergencyAccess = true;
 
   programs.nix-ld.enable = true;
-  environment.systemPackages = [
-    pkgs.ipmitool
+  environment.systemPackages = with pkgs; [
+    ipmitool
+    # NVIDIA utilities
+    nvtopPackages.nvidia
+    pciutils
+    cudatoolkit
   ];
 
   # Set mercury as the default user for local login and emergency console
   services.getty.autologinUser = "mercury";
 
   disko.devices.disk.main.device = "/dev/disk/by-id/nvme-WUS5EA1A1ESP5E3_240420800175";
+
+  # Enable NVIDIA GPU support for compute workloads
+  nixpkgs.config.allowUnfree = true;
+  hardware.graphics.enable = true;
+
+  # Load NVIDIA driver for compute
+  boot.kernelModules = ["nvidia" "nvidia_modeset" "nvidia_uvm" "nvidia_drm"];
+  boot.blacklistedKernelModules = ["nouveau"];
+
+  hardware.nvidia = {
+    modesetting.enable = true;
+    powerManagement.enable = false;
+    powerManagement.finegrained = false;
+    open = false;
+    nvidiaSettings = false;
+    package = config.boot.kernelPackages.nvidiaPackages.production;
+  };
 
   system.stateVersion = "25.05";
 }

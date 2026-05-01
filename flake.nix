@@ -95,6 +95,7 @@
             pkgs.nil
             pkgs.nixd
             pkgs.alejandra
+            pkgs.just
           ];
           shellHook = ''
             export NIX_PATH=""

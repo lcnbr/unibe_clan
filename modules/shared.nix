@@ -43,6 +43,12 @@ in {
   services.openssh.settings.PasswordAuthentication = false;
   services.openssh.settings.PermitRootLogin = "no";
   services.openssh.settings.DenyUsers = ["mercury"];
+  programs.mosh.enable = true;
+  programs.mosh.openFirewall = true;
+
+  networking.firewall.allowedTCPPorts = [
+    8080
+  ];
 
   environment.systemPackages = with pkgs; [
     tailscale

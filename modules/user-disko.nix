@@ -109,6 +109,14 @@
             # '';
           };
 
+          "local/common" = {
+            type = "zfs_fs";
+            mountpoint = "/common";
+            options = {
+              "com.sun:auto-snapshot" = "true";
+            };
+          };
+
           # Note: Per-user ZFS datasets are no longer created at install time
           # to avoid requiring reinstallation when adding users.
           # User home directories will be created on the shared /home dataset.

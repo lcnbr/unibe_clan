@@ -11,6 +11,7 @@ in {
     pkgs.zfs
     pkgs.rsync
     pkgs.gnused
+    pkgs.acl
   ];
 
   # Ensure the directory structure persists
@@ -20,10 +21,24 @@ in {
       '')
       userData.users);
   in [
+    "d /common 2775 root users -"
     "d /shared 0755 root root -"
     "d /shared/deleted-users 0700 root wheel -"
     userDirRules
   ];
+
+  system.activationScripts.commonVolumePermissions = {
+    text = ''
+      if [[ -d /common ]]; then
+        chown root:users /common
+        chmod 2775 /common
+        ${pkgs.acl}/bin/setfacl -m g:users:rwx /common
+        ${pkgs.acl}/bin/setfacl -m d:g:users:rwx /common
+        ${pkgs.acl}/bin/setfacl -m d:o::rx /common
+      fi
+    '';
+    deps = ["users" "groups"];
+  };
 
   # Activation script to clean up orphaned shared directories immediately during deployment
   system.activationScripts.cleanupOrphanedSharedDirs = {

@@ -60,11 +60,20 @@
             input = "self";
           };
 
+          roles.peer.machines.itpbowser = {};
           roles.peer.machines.itppeach = {};
           roles.peer.machines.itphlies = {};
         };
 
         machines = {
+          itpbowser = {
+            imports = [
+              ./machines/itpbowser/configuration.nix
+              home-manager.nixosModules.home-manager
+            ];
+            nixpkgs.hostPlatform = "x86_64-linux";
+          };
+
           itppeach = {
             imports = [
               ./machines/itppeach/configuration.nix

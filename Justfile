@@ -12,6 +12,9 @@ build machine="itppeach":
 update machine="itppeach":
   nix develop -c clan machines update {{machine}} --flake .
 
+update-bowser:
+  just update itpbowser
+
 update-peach:
   just update itppeach
 

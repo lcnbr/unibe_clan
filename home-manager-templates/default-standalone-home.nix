@@ -22,6 +22,7 @@
     zellij
     vim
     devenv
+    codex
     helix
     htop
     tree

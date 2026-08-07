@@ -172,5 +172,9 @@ in {
       uid = 1113;
       personalKeys = [userSshKeys.kotarela];
     })
+    (mkUser {
+      name = "codex";
+      uid = 1114;
+    })
   ];
 }

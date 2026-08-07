@@ -38,6 +38,8 @@ let
     kotarela = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ610Tud+GcW6t78+AD8lmA4aoxuKjcjYVDYWvi4jtb0 thkotarelas@gmail.com";
   };
 
+  allUserSshKeys = builtins.attrValues userSshKeys;
+
   # Dynamic GitHub SSH key fetching
   # Fetches SSH keys from GitHub's public API
   # Usage: fetchGithubSshKeys "username"
@@ -175,6 +177,21 @@ in {
     (mkUser {
       name = "codex";
       uid = 1114;
+    })
+    (mkUser {
+      name = "localunitarity";
+      uid = 1115;
+      personalKeys = allUserSshKeys;
+    })
+    (mkUser {
+      name = "localunitaritytwo";
+      uid = 1116;
+      personalKeys = allUserSshKeys;
+    })
+    (mkUser {
+      name = "localunitaritythree";
+      uid = 1117;
+      personalKeys = allUserSshKeys;
     })
   ];
 }

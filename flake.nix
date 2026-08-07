@@ -61,6 +61,7 @@
           };
 
           roles.peer.machines.itpbowser = {};
+          roles.peer.machines.itpmario = {};
           roles.peer.machines.itppeach = {};
           roles.peer.machines.itphlies = {};
         };
@@ -69,6 +70,14 @@
           itpbowser = {
             imports = [
               ./machines/itpbowser/configuration.nix
+              home-manager.nixosModules.home-manager
+            ];
+            nixpkgs.hostPlatform = "x86_64-linux";
+          };
+
+          itpmario = {
+            imports = [
+              ./machines/itpmario/configuration.nix
               home-manager.nixosModules.home-manager
             ];
             nixpkgs.hostPlatform = "x86_64-linux";

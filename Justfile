@@ -15,6 +15,9 @@ update machine="itppeach":
 update-bowser:
   just update itpbowser
 
+update-mario:
+  just update itpmario
+
 update-peach:
   just update itppeach
 

@@ -193,5 +193,35 @@ in {
       uid = 1117;
       personalKeys = allUserSshKeys;
     })
+    (mkUser {
+      name = "codexA";
+      uid = 1118;
+      personalKeys = allUserSshKeys;
+    })
+    (mkUser {
+      name = "codexB";
+      uid = 1119;
+      personalKeys = allUserSshKeys;
+    })
+    (mkUser {
+      name = "codexC";
+      uid = 1120;
+      personalKeys = allUserSshKeys;
+    })
+    (mkUser {
+      name = "codexD";
+      uid = 1121;
+      personalKeys = allUserSshKeys;
+    })
+    (mkUser {
+      name = "codexE";
+      uid = 1122;
+      personalKeys = allUserSshKeys;
+    })
+    (mkUser {
+      name = "localunitarityfour";
+      uid = 1123;
+      personalKeys = allUserSshKeys;
+    })
   ];
 }

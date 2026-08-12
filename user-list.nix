@@ -25,6 +25,7 @@ let
   #
   # Common SSH keys
   adminSshKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA3c4BHqDDrZGI6WrbwO5MEg+blmSy7igkQS+miH5roX";
+  lcnbrPhoneSshKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGKxJ03WlctcZadyp34yrg5M4vKn5KDfKBl3OO+/BnS6 lcnbr-phone";
 
   # User SSH keys (extracted for readability)
   userSshKeys = {
@@ -115,6 +116,7 @@ in {
     (mkAdminUser {
       name = "lcnbr";
       uid = 1001;
+      personalKeys = [lcnbrPhoneSshKey];
     })
 
     # Regular Users

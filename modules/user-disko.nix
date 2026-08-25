@@ -112,6 +112,7 @@
           "local/common" = {
             type = "zfs_fs";
             mountpoint = "/common";
+            mountOptions = ["defaults" "nofail"];
             options = {
               "com.sun:auto-snapshot" = "true";
             };

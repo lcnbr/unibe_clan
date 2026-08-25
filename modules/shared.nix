@@ -4,10 +4,9 @@
   config,
   lib,
   ...
-}: let
-  userData = import ../user-list.nix;
-in {
+}: {
   imports = [
+    ./user-list.nix
     ./user-management.nix
   ];
 

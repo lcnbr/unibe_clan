@@ -1,5 +1,9 @@
-{pkgs, ...}: let
-  userData = import ../user-list.nix;
+{
+  config,
+  pkgs,
+  ...
+}: let
+  userData = import config.unibe.userListFile;
 in {
   # ZFS configuration
   boot.supportedFilesystems = ["zfs"];

@@ -1,9 +1,10 @@
 {
+  config,
   pkgs,
   lib,
   ...
 }: let
-  userData = import ../user-list.nix;
+  userData = import config.unibe.userListFile;
 in {
   # This module sets up Home Manager configurations for all users
   # User creation is handled by machine configurations

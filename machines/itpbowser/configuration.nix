@@ -1,9 +1,10 @@
 {
+  config,
   lib,
   pkgs,
   ...
 }: let
-  userData = import ../../user-list.nix; # The file above
+  userData = import config.unibe.userListFile;
 in {
   imports = [
     # contains your disk format and partitioning configuration.

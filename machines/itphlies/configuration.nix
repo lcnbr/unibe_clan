@@ -4,7 +4,7 @@
   pkgs,
   ...
 }: let
-  userData = import ../../user-list.nix; # The file above
+  userData = import config.unibe.userListFile;
 in {
   imports = [
     # contains your disk format and partitioning configuration.
@@ -12,6 +12,8 @@ in {
     ../../modules/shared.nix
     ../../modules/zfs-user-management.nix
   ];
+
+  unibe.userListFile = ../../user-lists/itppeach-itphlies.nix;
 
   users.users =
     lib.genAttrs

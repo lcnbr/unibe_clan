@@ -27,6 +27,8 @@ let
   ingestGroup = "codex-usage-dashboard";
   runtimeDirectory = "codex-usage-dashboard";
   runtimePath = "/run/${runtimeDirectory}";
+  stateDirectory = "codex-usage-dashboard";
+  historyPath = "/var/lib/${stateDirectory}/history.json";
 
   dashboardBin = "${cfg.package}/bin/codex-usage-dashboard";
   codexBin = "${cfg.codexPackage}/bin/codex";
@@ -52,6 +54,10 @@ let
       cfg.socket
       "--stale-after"
       "90s"
+      "--history-file"
+      historyPath
+      "--history-retention"
+      "1344h"
     ]
     ++ concatMap (user: [
       "--user"
@@ -309,10 +315,12 @@ in
 
             Restart = "always";
             RestartSec = "5s";
-            UMask = "0007";
+            UMask = "0077";
 
             RuntimeDirectory = runtimeDirectory;
             RuntimeDirectoryMode = "0750";
+            StateDirectory = stateDirectory;
+            StateDirectoryMode = "0700";
             ProtectHome = true;
             ReadWritePaths = [ runtimePath ];
             IPAddressDeny = "any";

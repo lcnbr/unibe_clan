@@ -1,13 +1,28 @@
 "use strict";
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+const MAIN_WEEK_MINUTES = 10080;
+const MAX_HISTORY_DAYS = 56;
+
 const accountsRoot = document.getElementById("accounts");
+const timelineRoot = document.getElementById("timeline");
+const trackingCopy = document.getElementById("tracking-copy");
 const updatedAt = document.getElementById("updated-at");
 const demoBanner = document.getElementById("demo-banner");
 const connectionDot = document.getElementById("connection-dot");
 const connectionLabel = document.getElementById("connection-label");
+const screenReaderStatus = document.getElementById("screen-reader-status");
+const earlierButton = document.getElementById("timeline-earlier");
+const nowButton = document.getElementById("timeline-now");
 
 let currentStatus = null;
+let historyStatus = null;
 let streamHasOpened = false;
+let timelineInitialized = false;
+let timelineRange = null;
+let latestStatusRevision = -1;
+let latestHistoryRevision = -1;
+let lastAnnouncementSignature = "";
 
 function node(tag, className, text) {
   const element = document.createElement(tag);
@@ -16,6 +31,15 @@ function node(tag, className, text) {
   }
   if (text !== undefined && text !== null) {
     element.textContent = String(text);
+  }
+  return element;
+}
+
+function timeNode(className, date, text) {
+  const element = node("time", className, text);
+  if (date) {
+    element.dateTime = date.toISOString();
+    element.title = date.toLocaleString();
   }
   return element;
 }
@@ -38,7 +62,7 @@ function titleCase(value) {
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function validDate(value, seconds) {
+function validDate(value, seconds = false) {
   if (value === null || value === undefined || value === "") {
     return null;
   }
@@ -46,21 +70,31 @@ function validDate(value, seconds) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-function formatClock(value, seconds) {
+function formatClock(value, seconds = true) {
   const date = validDate(value, seconds);
   if (!date) {
-    return "Reset time unavailable";
+    return "Reset unavailable";
   }
   return new Intl.DateTimeFormat(undefined, {
     weekday: "short",
+    month: "short",
+    day: "numeric",
     hour: "numeric",
     minute: "2-digit",
     timeZoneName: "short",
   }).format(date);
 }
 
+function formatDay(date) {
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  }).format(date);
+}
+
 function relativeTime(value) {
-  const date = validDate(value, false);
+  const date = validDate(value);
   if (!date || date.getUTCFullYear() <= 1) {
     return "Never";
   }
@@ -85,7 +119,7 @@ function relativeTime(value) {
 function countdown(value) {
   const date = validDate(value, true);
   if (!date) {
-    return "Countdown unavailable";
+    return "—";
   }
   let seconds = Math.max(0, Math.floor((date.getTime() - Date.now()) / 1000));
   if (seconds <= 0) {
@@ -105,91 +139,64 @@ function countdown(value) {
   return `${minutes}m remaining`;
 }
 
-function windowName(windowValue, fallback) {
-  const minutes = windowValue.windowDurationMins;
-  if (!minutes) {
-    return fallback;
+function canonicalMainUsage(account) {
+  if (account && account.mainUsage && Number(account.mainUsage.windowDurationMins) === MAIN_WEEK_MINUTES) {
+    return account.mainUsage;
   }
-  if (minutes % 10080 === 0) {
-    const weeks = minutes / 10080;
-    return weeks === 1 ? "Weekly window" : `${weeks}-week window`;
-  }
-  if (minutes % 1440 === 0) {
-    const days = minutes / 1440;
-    return days === 1 ? "Daily window" : `${days}-day window`;
-  }
-  if (minutes % 60 === 0) {
-    return `${minutes / 60}-hour window`;
-  }
-  return `${minutes}-minute window`;
+  return null;
 }
 
-function appendWindow(parent, windowValue, fallbackName) {
-  const section = node("section", "window");
-  const heading = node("div", "window-title");
-  heading.append(node("strong", "", windowName(windowValue, fallbackName)));
-
-  const reset = node("span", "reset-at", formatClock(windowValue.resetsAt, true));
-  if (windowValue.resetsAt) {
-    const resetDate = validDate(windowValue.resetsAt, true);
-    if (resetDate) {
-      reset.title = resetDate.toLocaleString();
-    }
+function historyFor(username) {
+  if (!historyStatus || !Array.isArray(historyStatus.accounts)) {
+    return null;
   }
-  heading.append(reset);
-  section.append(heading);
-
-  const copy = node("div", "quota-copy");
-  const main = node("div", "quota-main");
-  const used = Number(windowValue.usedPercent);
-  const remaining = Number(windowValue.remainingPercent);
-  main.append(document.createTextNode(`${used}% `), node("span", "", "used"));
-  copy.append(main, node("div", "quota-remaining", `${remaining}% remaining`));
-  section.append(copy);
-
-  const meter = node("div", "meter");
-  meter.setAttribute("role", "progressbar");
-  meter.setAttribute("aria-label", `${windowName(windowValue, fallbackName)} usage`);
-  meter.setAttribute("aria-valuemin", "0");
-  meter.setAttribute("aria-valuemax", "100");
-  meter.setAttribute("aria-valuenow", String(used));
-  if (used >= 100) {
-    meter.classList.add("danger");
-  } else if (used >= 80) {
-    meter.classList.add("warn");
-  }
-  const fill = node("span");
-  fill.style.width = `${Math.max(0, Math.min(100, used))}%`;
-  meter.append(fill);
-  section.append(meter);
-
-  const meta = node("div", "window-meta");
-  meta.append(
-    node("span", "", windowValue.windowDurationMins ? `${windowValue.windowDurationMins.toLocaleString()} min allocation` : "Rolling allocation"),
-    node("span", "countdown", countdown(windowValue.resetsAt)),
-  );
-  section.append(meta);
-  parent.append(section);
+  return historyStatus.accounts.find((entry) => entry.username === username) || null;
 }
 
-function reached(limit) {
-  return Boolean(
-    limit.spendControlReached ||
-    limit.reachedType ||
-    (limit.primary && limit.primary.usedPercent >= 100) ||
-    (limit.secondary && limit.secondary.usedPercent >= 100),
-  );
+function isFloatingUnusedWindow(account, windowValue) {
+  if (!windowValue || Number(windowValue.usedPercent) !== 0) {
+    return false;
+  }
+  const observedAt = validDate(account.observedAt);
+  const resetAt = validDate(windowValue.resetsAt, true);
+  const duration = Number(windowValue.windowDurationMins);
+  if (!observedAt || !resetAt || !Number.isFinite(duration) || duration <= 0) {
+    return false;
+  }
+  const expectedReset = observedAt.getTime() + duration * 60 * 1000;
+  return Math.abs(resetAt.getTime() - expectedReset) <= 2 * 60 * 1000;
 }
 
-function accountReached(account) {
-  return Array.isArray(account.limits) && account.limits.some(reached);
+function anchoredReset(account) {
+  const usage = canonicalMainUsage(account);
+  const history = historyFor(account.username);
+  if (history && history.active && (
+    !usage || Number(usage.resetsAt) === Number(history.active.resetsAt)
+  )) {
+    return history.active;
+  }
+  if (!usage || !usage.resetsAt || isFloatingUnusedWindow(account, usage)) {
+    return null;
+  }
+  const resetAt = Number(usage.resetsAt);
+  const duration = Number(usage.windowDurationMins) || MAIN_WEEK_MINUTES;
+  return {
+    windowStartedAt: resetAt - duration * 60,
+    resetsAt: resetAt,
+    usedPercent: Number(usage.usedPercent) || 0,
+  };
+}
+
+function mainReached(account) {
+  const usage = canonicalMainUsage(account);
+  return Boolean(usage && Number(usage.usedPercent) >= 100);
 }
 
 function statusPresentation(account) {
   if (account.stale) {
     return { label: "Stale", className: "warning" };
   }
-  if (accountReached(account)) {
+  if (mainReached(account)) {
     return { label: "Limit reached", className: "error" };
   }
   if (account.state === "signed_out") {
@@ -204,159 +211,350 @@ function statusPresentation(account) {
   return { label: "Live", className: "" };
 }
 
-function safeErrorMessage(category) {
-  const messages = {
-    awaiting_collector: "Waiting for this user’s collector to publish its first snapshot.",
-    auth_unavailable: "The account session is unavailable. Sign in again from this Linux account.",
-    codex_unavailable: "The local Codex App Server is temporarily unavailable.",
-    protocol_error: "The installed Codex App Server returned an incompatible response.",
-    rate_limit_read_failed: "Account identity is available, but quota windows could not be refreshed.",
-    publish_failed: "The collector could not deliver its latest snapshot.",
-  };
-  return messages[category] || "Live account data is temporarily unavailable.";
+function usageLabel(used) {
+  return used === 0 ? "0% reported" : `≈${used}% used`;
 }
 
-function appendLimit(parent, limit) {
-  const block = node("article", "limit-block");
-  const heading = node("div", "limit-heading");
-  const name = limit.name || limit.id || "Quota";
-  heading.append(node("h3", "limit-name", name));
-  if (limit.id && limit.id !== name) {
-    heading.append(node("span", "limit-id", limit.id));
-  } else if (limit.planType) {
-    heading.append(node("span", "limit-id", titleCase(limit.planType)));
-  }
-  block.append(heading);
-
-  let windows = 0;
-  if (limit.primary) {
-    appendWindow(block, limit.primary, "Primary window");
-    windows += 1;
-  }
-  if (limit.secondary) {
-    appendWindow(block, limit.secondary, "Secondary window");
-    windows += 1;
-  }
-  if (windows === 0) {
-    block.append(node("p", "state-message", "This bucket did not return a percentage window."));
-  }
-
-  if (limit.credits) {
-    const credit = node("div", "credit-row");
-    let value = "No balance";
-    if (limit.credits.unlimited) {
-      value = "Unlimited";
-    } else if (limit.credits.balance !== undefined && limit.credits.balance !== null) {
-      value = String(limit.credits.balance);
-    } else if (limit.credits.hasCredits) {
-      value = "Available";
-    }
-    credit.append(node("span", "", "Credits"), node("strong", "", value));
-    block.append(credit);
-  }
-
-  if (limit.individualLimit) {
-    const individual = node("div", "individual-row");
-    individual.append(
-      node("span", "", `Spend control · ${countdown(limit.individualLimit.resetsAt)}`),
-      node("strong", "", `${limit.individualLimit.used} / ${limit.individualLimit.limit}`),
-    );
-    block.append(individual);
-  }
-
-  if (reached(limit)) {
-    const reason = limit.reachedType ? ` (${titleCase(limit.reachedType)})` : "";
-    block.append(node("p", "state-message", `This quota is currently reached${reason}.`));
-  }
-  parent.append(block);
-}
-
-function emptyState(account) {
-  const empty = node("div", "empty-state");
-  let title = "Usage unavailable";
-  let message = safeErrorMessage(account.errorCategory);
-  if (account.state === "signed_out") {
-    title = "Not signed in";
-    message = "Open Codex as this Linux user and complete ChatGPT sign-in to populate quota windows.";
-  } else if (account.state === "api_key") {
-    title = "API key session";
-    message = "ChatGPT subscription quota windows are not reported for API-key authentication.";
-  } else if (account.state === "ok") {
-    title = "No quota windows";
-    message = "The account is signed in, but App Server did not return a usage bucket.";
-  }
-  empty.append(node("strong", "", title), node("p", "", message));
-  return empty;
-}
-
-function renderAccount(account) {
-  const card = node("article", "account-card");
-  if (account.stale) {
-    card.classList.add("is-stale");
-  }
-  if (accountReached(account)) {
-    card.classList.add("is-reached");
-  }
-
-  const top = node("header", "card-top");
-  const user = node("div", "card-user");
-  const initial = String(account.username || "?").replace("codex", "c").slice(0, 2);
-  user.append(node("div", "user-orb", initial));
-
-  const identity = node("div");
-  identity.append(node("div", "username", account.username || "unknown"));
-  const email = account.account && account.account.email ? account.account.email : "No ChatGPT email";
-  const emailNode = node("div", "email", email);
-  emailNode.title = email;
-  identity.append(emailNode);
-  if (account.account && account.account.planType) {
-    identity.append(node("div", "plan", `${titleCase(account.account.planType)} plan`));
-  }
-  user.append(identity);
-
-  const presentation = statusPresentation(account);
-  top.append(user, node("span", `status-pill ${presentation.className}`.trim(), presentation.label));
-  card.append(top);
-
-  const hasLastGoodLimits = Array.isArray(account.limits) && account.limits.length > 0;
-  if (account.stale) {
-    card.append(node("p", "state-message", hasLastGoodLimits
-      ? "Collector data is stale. Showing the last successful quota snapshot."
-      : "This collector has not delivered fresh account data."));
-  } else if (account.state === "unavailable" && hasLastGoodLimits) {
-    card.append(node("p", "state-message", `${safeErrorMessage(account.errorCategory)} Showing last-good quota data.`));
-  }
-
-  if (hasLastGoodLimits) {
-    const limits = node("div", "limit-list");
-    account.limits.forEach((limit) => appendLimit(limits, limit));
-    card.append(limits);
-  } else {
-    card.append(emptyState(account));
-  }
-
-  const footer = node("footer", "card-footer");
-  footer.append(
-    node("span", "", `Observed ${relativeTime(account.observedAt)}`),
-    node("span", "", `Collector ${relativeTime(account.lastSeenAt)}`),
+function appendMeter(parent, used, label) {
+  const meter = node("div", "meter");
+  meter.setAttribute("role", "progressbar");
+  meter.setAttribute("aria-label", label);
+  meter.setAttribute("aria-valuemin", "0");
+  meter.setAttribute("aria-valuemax", "100");
+  meter.setAttribute("aria-valuenow", String(used));
+  meter.setAttribute(
+    "aria-valuetext",
+    used === 0 ? "0 percent reported; actual usage may be below one half percent" : `approximately ${used} percent used`,
   );
-  card.append(footer);
-  return card;
+  if (used >= 100) {
+    meter.classList.add("danger");
+  } else if (used >= 80) {
+    meter.classList.add("warn");
+  }
+  const fill = node("span");
+  fill.style.width = `${Math.max(0, Math.min(100, used))}%`;
+  meter.append(fill);
+  parent.append(meter);
+}
+
+function initials(username) {
+  const value = String(username || "?");
+  if (value.startsWith("codex")) {
+    return value.replace("codex", "c").slice(0, 2);
+  }
+  return value.slice(0, 2);
+}
+
+function renderAccountSummary() {
+  if (!currentStatus || !Array.isArray(currentStatus.accounts)) {
+    return;
+  }
+
+  const table = node("table", "account-table");
+  const caption = node("caption", "visually-hidden", "Main weekly Codex usage by Linux account");
+  const head = node("thead");
+  const headingRow = node("tr");
+  ["Account", "Plan", "Main weekly usage", "Next reset", "State", "Observed"].forEach((label) => {
+    headingRow.append(node("th", "", label));
+  });
+  head.append(headingRow);
+
+  const body = node("tbody");
+  currentStatus.accounts.forEach((account) => {
+    const row = node("tr");
+    if (account.stale) {
+      row.classList.add("is-stale");
+    }
+    if (mainReached(account)) {
+      row.classList.add("is-reached");
+    }
+
+    const identityCell = node("th", "account-identity");
+    identityCell.scope = "row";
+    const identityInner = node("span", "account-identity-inner");
+    const orb = node("span", "user-orb", initials(account.username));
+    orb.setAttribute("aria-hidden", "true");
+    identityInner.append(orb);
+    const identity = node("span", "identity-copy");
+    identity.append(node("strong", "username", account.username || "unknown"));
+    const email = account.account && account.account.email ? account.account.email : "No ChatGPT email";
+    const emailNode = node("span", "email", email);
+    emailNode.title = email;
+    identity.append(emailNode);
+    identityInner.append(identity);
+    identityCell.append(identityInner);
+    row.append(identityCell);
+
+    const plan = account.account && account.account.planType
+      ? `${titleCase(account.account.planType)}`
+      : "—";
+    row.append(node("td", "plan-cell", plan));
+
+    const usage = canonicalMainUsage(account);
+    const usageCell = node("td", "usage-cell");
+    if (usage) {
+      const used = Math.max(0, Math.min(100, Number(usage.usedPercent) || 0));
+      usageCell.append(node("strong", "usage-value", usageLabel(used)));
+      appendMeter(usageCell, used, `Main weekly usage for ${account.username}`);
+    } else {
+      usageCell.append(node("span", "unavailable-value", "—"));
+    }
+    row.append(usageCell);
+
+    const resetCell = node("td", "reset-cell");
+    const active = anchoredReset(account);
+    if (active && active.resetsAt) {
+      const resetDate = validDate(active.resetsAt, true);
+      resetCell.append(
+        timeNode("reset-clock", resetDate, formatClock(active.resetsAt)),
+        node("span", "countdown", countdown(active.resetsAt)),
+      );
+      resetCell.lastElementChild.dataset.countdown = String(active.resetsAt);
+    } else if (usage && isFloatingUnusedWindow(account, usage)) {
+      resetCell.append(
+        node("strong", "idle-window", "Starts on next use"),
+        node("span", "reset-explainer", "No fixed weekly reset yet"),
+      );
+    } else {
+      resetCell.append(node("span", "unavailable-value", "—"));
+    }
+    row.append(resetCell);
+
+    const presentation = statusPresentation(account);
+    const stateCell = node("td", "state-cell");
+    stateCell.append(node("span", `status-pill ${presentation.className}`.trim(), presentation.label));
+    row.append(stateCell);
+
+    const observedCell = node("td", "observed-cell", relativeTime(account.observedAt));
+    observedCell.dataset.relativeTime = account.observedAt || "";
+    row.append(observedCell);
+    body.append(row);
+  });
+
+  table.append(caption, head, body);
+  accountsRoot.replaceChildren(table);
+  accountsRoot.setAttribute("aria-busy", "false");
+}
+
+function localDayStart(value) {
+  const date = new Date(value);
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function resetWindowsFor(account) {
+  const entry = historyFor(account.username);
+  const windows = [];
+  if (entry && Array.isArray(entry.events)) {
+    entry.events.forEach((event) => {
+      if (event && event.resetsAt && event.windowStartedAt) {
+        windows.push({ ...event, kind: "history" });
+      }
+    });
+  }
+  const active = anchoredReset(account);
+  if (active && active.resetsAt && active.windowStartedAt) {
+    const duplicate = windows.some((event) => Number(event.resetsAt) === Number(active.resetsAt));
+    if (!duplicate) {
+      windows.push({ ...active, kind: "active" });
+    }
+  }
+  return windows;
+}
+
+function timelineGeometry(accounts) {
+  const now = Date.now();
+  const oldestAllowed = now - MAX_HISTORY_DAYS * DAY_MS;
+  let earliest = now - DAY_MS;
+  accounts.forEach((account) => {
+    resetWindowsFor(account).forEach((windowValue) => {
+      const started = Number(windowValue.windowStartedAt) * 1000;
+      if (Number.isFinite(started)) {
+        earliest = Math.min(earliest, Math.max(oldestAllowed, started));
+      }
+    });
+  });
+  const start = localDayStart(earliest).getTime();
+  const end = now + 7 * DAY_MS;
+  const labelWidth = window.matchMedia("(max-width: 620px)").matches ? 112 : 164;
+  const available = Math.max(320, timelineRoot.clientWidth - labelWidth);
+  const dayWidth = Math.max(96, Math.min(156, available / 7));
+  const pixelsPerMs = dayWidth / DAY_MS;
+  const width = labelWidth + Math.ceil((end - start) * pixelsPerMs);
+  return { start, end, labelWidth, dayWidth, pixelsPerMs, width };
+}
+
+function timelineLeft(timestamp, geometry) {
+  return geometry.labelWidth + (timestamp - geometry.start) * geometry.pixelsPerMs;
+}
+
+function renderTimelineWindow(lane, windowValue, geometry, account) {
+  const start = Number(windowValue.windowStartedAt) * 1000;
+  const end = Number(windowValue.resetsAt) * 1000;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < geometry.start || start > geometry.end) {
+    return;
+  }
+  const clippedStart = Math.max(start, geometry.start);
+  const clippedEnd = Math.min(end, geometry.end);
+  const track = node("span", `reset-window ${windowValue.kind === "active" ? "active" : "history"}`);
+  if (account.stale && windowValue.kind === "active") {
+    track.classList.add("stale");
+  }
+  track.style.left = `${timelineLeft(clippedStart, geometry)}px`;
+  track.style.width = `${Math.max(2, (clippedEnd - clippedStart) * geometry.pixelsPerMs)}px`;
+  lane.append(track);
+
+  if (end >= geometry.start && end <= geometry.end) {
+    const marker = node("span", `reset-marker ${windowValue.kind === "active" ? "next" : "past"}`);
+    marker.style.left = `${timelineLeft(end, geometry)}px`;
+    marker.title = `${windowValue.kind === "active" ? "Next reset" : "Completed reset"}: ${new Date(end).toLocaleString()}`;
+    marker.setAttribute("aria-hidden", "true");
+    lane.append(marker);
+  }
+}
+
+function setTimelineToNow(smooth = false) {
+  if (!timelineRange) {
+    return;
+  }
+  const target = Math.max(0, timelineLeft(Date.now(), timelineRange) - timelineRange.labelWidth - 16);
+  timelineRoot.scrollTo({ left: target, behavior: scrollBehavior(smooth) });
+}
+
+function scrollBehavior(smooth) {
+  return smooth && !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ? "smooth"
+    : "auto";
+}
+
+function renderTimeline() {
+  if (!currentStatus || !Array.isArray(currentStatus.accounts)) {
+    return;
+  }
+
+  let anchorTimestamp = null;
+  if (timelineInitialized && timelineRange) {
+    anchorTimestamp = timelineRange.start
+      + Math.max(0, timelineRoot.scrollLeft) / timelineRange.pixelsPerMs;
+  }
+
+  const geometry = timelineGeometry(currentStatus.accounts);
+  const canvas = node("div", "timeline-canvas");
+  canvas.style.width = `${geometry.width}px`;
+  canvas.style.setProperty("--label-width", `${geometry.labelWidth}px`);
+  canvas.style.setProperty("--day-width", `${geometry.dayWidth}px`);
+
+  const axis = node("div", "timeline-axis");
+  axis.style.width = `${geometry.width}px`;
+  let day = localDayStart(geometry.start);
+  while (day.getTime() <= geometry.end) {
+    const tick = node("div", "day-tick", formatDay(day));
+    tick.style.left = `${timelineLeft(day.getTime(), geometry)}px`;
+    axis.append(tick);
+    day = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1);
+  }
+  canvas.append(axis);
+
+  currentStatus.accounts.forEach((account) => {
+    const lane = node("div", "timeline-lane");
+    lane.style.width = `${geometry.width}px`;
+    const label = node("div", "lane-label");
+    label.append(node("strong", "", account.username || "unknown"));
+    const active = anchoredReset(account);
+    const usage = canonicalMainUsage(account);
+    let summary = "No weekly data";
+    if (active && active.resetsAt) {
+      summary = countdown(active.resetsAt);
+    } else if (usage && isFloatingUnusedWindow(account, usage)) {
+      summary = "Starts on next use";
+    }
+    label.append(node("span", "", summary));
+    lane.append(label);
+
+    const windows = resetWindowsFor(account);
+    windows.forEach((windowValue) => renderTimelineWindow(lane, windowValue, geometry, account));
+
+    if (windows.length === 0) {
+      const empty = node("span", "lane-empty", usage ? "No fixed reset" : "No weekly data");
+      empty.style.left = `${timelineLeft(Date.now(), geometry) + 22}px`;
+      lane.append(empty);
+    }
+
+    const accessible = node("span", "visually-hidden");
+    const completed = windows.filter((windowValue) => windowValue.kind === "history");
+    const currentSummary = active && active.resetsAt
+      ? `${account.username} next resets ${formatClock(active.resetsAt)}.`
+      : `${account.username} has no fixed weekly reset.`;
+    const historySummary = completed.length > 0
+      ? ` ${completed.length} completed reset${completed.length === 1 ? "" : "s"} tracked; most recent ${formatClock(completed[completed.length - 1].resetsAt)}.`
+      : " No completed resets tracked yet.";
+    accessible.textContent = currentSummary + historySummary;
+    lane.append(accessible);
+    canvas.append(lane);
+  });
+
+  const nowLine = node("span", "now-line");
+  nowLine.style.left = `${timelineLeft(Date.now(), geometry)}px`;
+  nowLine.dataset.nowLine = "true";
+  nowLine.append(node("span", "", "Now"));
+  canvas.append(nowLine);
+
+  timelineRoot.replaceChildren(canvas);
+  timelineRoot.setAttribute("aria-busy", "false");
+  timelineRange = geometry;
+
+  if (!timelineInitialized) {
+    timelineInitialized = true;
+    requestAnimationFrame(() => setTimelineToNow(false));
+  } else if (anchorTimestamp !== null) {
+    const restored = Math.max(0, (anchorTimestamp - geometry.start) * geometry.pixelsPerMs);
+    timelineRoot.scrollLeft = restored;
+  }
+
+  if (historyStatus && historyStatus.degraded) {
+    trackingCopy.textContent = "Live usage is available, but reset history could not be saved. The service will retry automatically.";
+    trackingCopy.classList.add("warning-copy");
+  } else if (historyStatus && historyStatus.trackingSince) {
+    trackingCopy.classList.remove("warning-copy");
+    const since = validDate(historyStatus.trackingSince);
+    trackingCopy.textContent = since
+      ? `History tracked since ${since.toLocaleString()}. Scroll left to review completed weekly windows.`
+      : "Scroll left to review completed weekly windows.";
+  } else {
+    trackingCopy.classList.remove("warning-copy");
+    trackingCopy.textContent = "Reset history begins when the first weekly window becomes anchored.";
+  }
 }
 
 function render() {
   if (!currentStatus || !Array.isArray(currentStatus.accounts)) {
     return;
   }
-  const cards = currentStatus.accounts.map(renderAccount);
-  accountsRoot.replaceChildren(...cards);
-  accountsRoot.setAttribute("aria-busy", "false");
+  renderTimeline();
+  renderAccountSummary();
   demoBanner.hidden = !currentStatus.demo;
   updatedAt.textContent = relativeTime(currentStatus.generatedAt);
-  const generated = validDate(currentStatus.generatedAt, false);
+  const generated = validDate(currentStatus.generatedAt);
   if (generated) {
     updatedAt.dateTime = generated.toISOString();
     updatedAt.title = generated.toLocaleString();
+  }
+}
+
+function updateClockText() {
+  document.querySelectorAll("[data-countdown]").forEach((element) => {
+    element.textContent = countdown(element.dataset.countdown);
+  });
+  document.querySelectorAll("[data-relative-time]").forEach((element) => {
+    element.textContent = relativeTime(element.dataset.relativeTime);
+  });
+  if (currentStatus) {
+    updatedAt.textContent = relativeTime(currentStatus.generatedAt);
+  }
+  if (timelineRange) {
+    const line = timelineRoot.querySelector("[data-now-line]");
+    if (line) {
+      line.style.left = `${timelineLeft(Date.now(), timelineRange)}px`;
+    }
   }
 }
 
@@ -364,8 +562,59 @@ function acceptStatus(status) {
   if (!status || status.schemaVersion !== 1 || !Array.isArray(status.accounts)) {
     return;
   }
+  const incomingGenerated = validDate(status.generatedAt);
+  const currentGenerated = currentStatus ? validDate(currentStatus.generatedAt) : null;
+  if (incomingGenerated && currentGenerated && incomingGenerated < currentGenerated) {
+    return;
+  }
+  const revision = Number(status.revision);
+  const newerEpoch = incomingGenerated && currentGenerated && incomingGenerated > currentGenerated;
+  const restarted = Number.isFinite(revision) && revision < latestStatusRevision && newerEpoch;
+  if (Number.isFinite(revision) && revision < latestStatusRevision && !restarted) {
+    return;
+  }
+  latestStatusRevision = Number.isFinite(revision) ? revision : latestStatusRevision;
   currentStatus = status;
   render();
+  const announcementSignature = JSON.stringify(status.accounts.map((account) => {
+    const usage = canonicalMainUsage(account);
+    return [
+      account.username,
+      account.state,
+      Boolean(account.stale),
+      usage ? usage.usedPercent : null,
+      usage ? usage.resetsAt : null,
+    ];
+  }));
+  if (announcementSignature !== lastAnnouncementSignature) {
+    screenReaderStatus.textContent = lastAnnouncementSignature
+      ? "Account usage or reset state updated."
+      : `Usage loaded for ${status.accounts.length} accounts.`;
+    lastAnnouncementSignature = announcementSignature;
+  }
+}
+
+function acceptHistory(history) {
+  if (!history || history.schemaVersion !== 1 || !Array.isArray(history.accounts)) {
+    return;
+  }
+  const incomingGenerated = validDate(history.generatedAt);
+  const currentGenerated = historyStatus ? validDate(historyStatus.generatedAt) : null;
+  if (incomingGenerated && currentGenerated && incomingGenerated < currentGenerated) {
+    return;
+  }
+  const revision = Number(history.revision);
+  const newerEpoch = incomingGenerated && currentGenerated && incomingGenerated > currentGenerated;
+  const restarted = Number.isFinite(revision) && revision < latestHistoryRevision && newerEpoch;
+  if (Number.isFinite(revision) && revision < latestHistoryRevision && !restarted) {
+    return;
+  }
+  latestHistoryRevision = Number.isFinite(revision) ? revision : latestHistoryRevision;
+  historyStatus = history;
+  if (currentStatus) {
+    renderTimeline();
+    renderAccountSummary();
+  }
 }
 
 async function fetchStatus() {
@@ -388,11 +637,31 @@ async function fetchStatus() {
   }
 }
 
+async function fetchHistory() {
+  try {
+    const response = await fetch("/api/v1/history", {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) {
+      return;
+    }
+    acceptHistory(await response.json());
+  } catch {
+    // Current usage remains useful while retained history is unavailable.
+  }
+}
+
 function connectEvents() {
   const stream = new EventSource("/api/v1/events");
   stream.addEventListener("open", () => {
+    // Revisions are process-local for live state. A reconnect may follow a
+    // service restart, so allow the new process to begin again at revision 0.
+    latestStatusRevision = -1;
+    latestHistoryRevision = -1;
     streamHasOpened = true;
     setConnection("live", "Live updates");
+    fetchHistory();
   });
   stream.addEventListener("snapshot", (event) => {
     try {
@@ -407,7 +676,45 @@ function connectEvents() {
   });
 }
 
+earlierButton.addEventListener("click", () => {
+  if (timelineRange) {
+    timelineRoot.scrollBy({ left: -7 * timelineRange.dayWidth, behavior: scrollBehavior(true) });
+  }
+});
+
+nowButton.addEventListener("click", () => setTimelineToNow(true));
+
+timelineRoot.addEventListener("keydown", (event) => {
+  if (!timelineRange) {
+    return;
+  }
+  const movements = {
+    ArrowLeft: -timelineRange.dayWidth,
+    ArrowRight: timelineRange.dayWidth,
+    PageUp: -7 * timelineRange.dayWidth,
+    PageDown: 7 * timelineRange.dayWidth,
+  };
+  if (movements[event.key] !== undefined) {
+    event.preventDefault();
+    timelineRoot.scrollBy({ left: movements[event.key], behavior: scrollBehavior(true) });
+  }
+});
+
+if ("ResizeObserver" in window) {
+  let resizeTimer = null;
+  new ResizeObserver(() => {
+    window.clearTimeout(resizeTimer);
+    resizeTimer = window.setTimeout(() => {
+      if (currentStatus) {
+        renderTimeline();
+      }
+    }, 100);
+  }).observe(timelineRoot);
+}
+
 fetchStatus();
+fetchHistory();
 connectEvents();
-setInterval(render, 1000);
-setInterval(fetchStatus, 60000);
+window.setInterval(updateClockText, 1000);
+window.setInterval(fetchStatus, 60000);
+window.setInterval(fetchHistory, 60000);

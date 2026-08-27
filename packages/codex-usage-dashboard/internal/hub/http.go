@@ -10,11 +10,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	usagehistory "codex-usage-dashboard/internal/history"
 	"codex-usage-dashboard/internal/model"
 )
 
 type HTTPHandler struct {
 	Hub           *Hub
+	History       *usagehistory.Tracker
 	Assets        fs.FS
 	AllowedHosts  []string
 	eventSequence *atomic.Uint64
@@ -35,6 +37,7 @@ func (h HTTPHandler) Handler() (http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", h.health)
 	mux.HandleFunc("/api/v1/status", h.status)
+	mux.HandleFunc("/api/v1/history", h.history)
 	mux.HandleFunc("/api/v1/events", h.events)
 	if h.Assets != nil {
 		if assets, err := fs.Sub(h.Assets, "assets"); err == nil {
@@ -43,6 +46,19 @@ func (h HTTPHandler) Handler() (http.Handler, error) {
 		mux.HandleFunc("/", h.index)
 	}
 	return securityHeaders(allowedHosts.handler(mux)), nil
+}
+
+func (h HTTPHandler) history(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, "GET")
+		return
+	}
+	if h.History == nil {
+		http.Error(w, "history unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(h.History.Snapshot())
 }
 
 func (h HTTPHandler) health(w http.ResponseWriter, r *http.Request) {

@@ -251,6 +251,7 @@ func (c *Collector) refresh(ctx context.Context, client appServer) (bool, string
 			return false, model.ErrorRateLimitRead
 		}
 		snapshot.Limits = sanitizeLimits(limits)
+		snapshot.MainUsage = sanitizeMainUsage(limits)
 	}
 	snapshot.Normalize()
 	if err := snapshot.Validate(); err != nil {

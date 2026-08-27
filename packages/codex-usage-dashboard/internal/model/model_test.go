@@ -60,3 +60,23 @@ func TestValidateRejectsUnsafeOrUnknownValues(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateRequiresCanonicalWeeklyMainUsage(t *testing.T) {
+	email := "person@example.com"
+	duration := int64(300)
+	reset := time.Now().Add(time.Hour).Unix()
+	snapshot := Snapshot{
+		SchemaVersion: SchemaVersion,
+		Username:      "codex",
+		State:         StateOK,
+		Account:       &Account{Type: "chatgpt", Email: &email, PlanType: "pro"},
+		MainUsage: &Window{
+			UsedPercent: 12, RemainingPercent: 88, WindowDurationMins: &duration, ResetsAt: &reset,
+		},
+		Limits:     []RateLimit{},
+		ObservedAt: time.Now().UTC(),
+	}
+	if err := snapshot.Validate(); err == nil {
+		t.Fatal("non-weekly main usage unexpectedly validated")
+	}
+}

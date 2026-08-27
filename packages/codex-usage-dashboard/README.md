@@ -17,19 +17,25 @@ third-party request.
 
 ## What the dashboard reports
 
-For each Linux account, the UI and `GET /api/v1/status` show:
+The UI has two coordinated views:
 
-- the full ChatGPT email and plan;
-- every rate-limit bucket returned by Codex App Server;
-- primary and secondary windows, with used and remaining percentages;
-- local reset time and a live countdown;
-- credit balance or unlimited state when returned;
-- reached-limit, signed-out, API-key, unavailable, and stale states; and
-- observation, last-seen, and last-good timestamps.
+- a horizontally scrollable weekly timeline with one lane per Linux user,
+  anchored next resets, completed reset history, and an honest “starts on next
+  use” state for unused windows whose reset timestamp is still moving; and
+- a compact one-row-per-user account overview with the full ChatGPT email,
+  plan, canonical main weekly usage, reset countdown, freshness, and state.
 
-Codex App Server exposes percentages and reset windows. It does not expose a
-reliable exact count of messages remaining, so the dashboard never invents
-one. Historical token activity is also intentionally excluded.
+Spark and every other model-specific bucket are excluded from both views. The
+collector takes main usage only from App Server's authoritative top-level
+`rateLimits` value and requires an exact 10,080-minute window. The detailed
+`GET /api/v1/status` response continues to contain all sanitized buckets for
+diagnostics, while `GET /api/v1/history` contains only usernames and reset
+window metadata.
+
+Codex App Server exposes rounded whole-number percentages and reset windows.
+It does not expose a reliable exact count of messages remaining, so the
+dashboard never invents one. A reported 0% can include usage below 0.5%.
+Historical token activity is intentionally excluded.
 
 The protocol integration uses the documented `account/read` and
 `account/rateLimits/read` methods:
@@ -54,9 +60,18 @@ restart the app-server at least every five minutes. The dashboard maps the
 kernel-reported sender UID to a fixed username; a collector cannot claim
 another account.
 
-The dashboard keeps only current snapshots in memory. An unavailable refresh
-retains last-good data, while data older than 90 seconds is marked stale.
-Restarting the dashboard discards all snapshots.
+The dashboard keeps current account snapshots only in memory. An unavailable
+refresh retains last-good data, while data older than 90 seconds is marked
+stale. Restarting the dashboard discards those live snapshots.
+
+Anchored weekly reset windows and completed reset events are retained for eight
+weeks in `/var/lib/codex-usage-dashboard/history.json`. The mode-0600 file is
+written atomically and contains no email, plan, credential, account ID, credit,
+or model-specific data. A zero-use timestamp must stay fixed across polls
+before it is anchored, preventing an unused “now + 7 days” window from
+generating false resets every 30 seconds. Tracking begins after this version is
+activated; history is not reconstructed retroactively. The state survives
+service restarts, NixOS switches, and reboots, but it is not a backup.
 
 ### Privacy and security properties
 
@@ -65,6 +80,9 @@ Restarting the dashboard discards all snapshots.
   state inside the collector user's service.
 - Tokens, account IDs, opaque credit IDs, raw JSON-RPC payloads, and raw errors
   are not part of the ingest schema and are not logged.
+- Reset history contains only the fixed Linux username, reset timestamps, and
+  rounded main weekly usage. Its state directory is mode `0700` and its file
+  is mode `0600`, so collector users cannot read it.
 - The Unix ingest socket is inside a mode-`0750` runtime directory. Snapshot
   size, schema, allowed fields, UID, and claimed username are checked.
 - The dashboard has `ProtectHome=true`, no home-directory bind, and an
@@ -138,29 +156,51 @@ closure as an ordinary user, dry-activate it, test it without changing the boot
 default, and then persist that exact closure:
 
 ```console
+set -euo pipefail
 old_system="$(readlink -f /run/current-system)"
 old_profile="$(readlink -f /nix/var/nix/profiles/system)"
 test "$old_system" = "$old_profile"
+
+recover_previous_system() {
+  failed_status="$?"
+  trap - ERR
+  set +e
+  current_profile="$(readlink -f /nix/var/nix/profiles/system)"
+  if test "$current_profile" = "$old_profile"; then
+    sudo nixos-rebuild test --no-reexec --store-path "$old_system"
+  else
+    sudo nixos-rebuild switch --no-reexec --store-path "$old_system"
+  fi
+  test "$(readlink -f /run/current-system)" = "$old_system"
+  rollback_status="$?"
+  test "$(readlink -f /nix/var/nix/profiles/system)" = "$old_system"
+  profile_status="$?"
+  if test "$rollback_status" -ne 0 || test "$profile_status" -ne 0; then
+    printf 'Automatic recovery did not restore the exact prior closure.\n' >&2
+    exit 1
+  fi
+  exit "$failed_status"
+}
+trap recover_previous_system ERR
 
 system_path="$(nix build --impure --no-link --print-out-paths \
   'path:.#nixosConfigurations.itphlies.config.system.build.toplevel')"
 sudo nixos-rebuild dry-activate --no-reexec --store-path "$system_path"
 sudo nixos-rebuild test --no-reexec --store-path "$system_path"
+test "$(readlink -f /run/current-system)" = "$system_path"
+test "$(readlink -f /nix/var/nix/profiles/system)" = "$old_profile"
 # Verify the nine services and local health endpoint, then make it persistent.
 sudo nixos-rebuild switch --no-reexec --store-path "$system_path"
+test "$(readlink -f /run/current-system)" = "$system_path"
+test "$(readlink -f /nix/var/nix/profiles/system)" = "$system_path"
+trap - ERR
 ```
 
 `test` and `switch` can return an error after partially activating the candidate;
-they do not automatically restore the previous live system. If candidate
-activation or verification fails, immediately reactivate the exact captured
-closure. Use `test` when the boot profile was not changed, or `switch` after a
-failed persistent switch:
-
-```console
-sudo nixos-rebuild test --no-reexec --store-path "$old_system"
-# After a failed `switch` instead:
-sudo nixos-rebuild switch --no-reexec --store-path "$old_system"
-```
+they do not automatically restore the previous live system. The `ERR` trap keeps
+the original paths in scope and restores that exact closure if candidate
+activation or verification fails. After recovery, rerun the unit, listener, and
+health checks against the restored system before attempting another activation.
 
 Do not substitute a generic `nixos-rebuild --rollback`; it may select a
 different older generation.
@@ -365,7 +405,7 @@ curl --connect-timeout 3 http://<lan-ip-of-this-machine>:8787/healthz
 ```
 
 After a reboot, repeat `systemctl status`, `tailscale serve status`, and the
-remote HTTPS health check. All eight cards should populate within 60 seconds;
+remote HTTPS health check. All eight account rows should populate within 60 seconds;
 ordinary rate-limit changes should appear within 30 seconds.
 
 ## Read-only HTTP interface
@@ -374,6 +414,7 @@ ordinary rate-limit changes should appear within 30 seconds.
 | --- | --- |
 | `GET /` | Embedded responsive dashboard |
 | `GET /api/v1/status` | Versioned snapshot for all eight users |
+| `GET /api/v1/history` | Private reset-window history without account emails |
 | `GET /api/v1/events` | Server-Sent Events, including initial state and updates |
 | `GET /healthz` | Process health without account data |
 

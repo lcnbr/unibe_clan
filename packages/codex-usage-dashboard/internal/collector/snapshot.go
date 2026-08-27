@@ -76,6 +76,22 @@ func sanitizeLimits(response codex.RateLimitsResponse) []model.RateLimit {
 	return limits
 }
 
+// sanitizeMainUsage selects only the canonical top-level weekly window. The
+// by-limit map contains model-specific buckets such as Spark and must never be
+// used for the compact account view or reset history.
+func sanitizeMainUsage(response codex.RateLimitsResponse) *model.Window {
+	for _, input := range []*codex.RateLimitWindow{
+		response.RateLimits.Primary,
+		response.RateLimits.Secondary,
+	} {
+		if input == nil || input.WindowDurationMins == nil || *input.WindowDurationMins != 10_080 {
+			continue
+		}
+		return sanitizeWindow(input)
+	}
+	return nil
+}
+
 func sanitizeLimit(input codex.RateLimitSnapshot, fallbackID string, index int) model.RateLimit {
 	id := ""
 	if input.LimitID != nil {

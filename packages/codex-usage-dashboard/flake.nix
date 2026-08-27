@@ -47,7 +47,10 @@
             pname = "codex-usage-dashboard-go-tests";
             version = "0.1.0";
             src = nixpkgs.lib.cleanSource ./.;
-            nativeBuildInputs = [ pkgs.go ];
+            nativeBuildInputs = [
+              pkgs.go
+              pkgs.nodejs
+            ];
             dontConfigure = true;
             buildPhase = ''
               runHook preBuild
@@ -57,6 +60,7 @@
               mkdir -p "$HOME" "$GOCACHE" "$GOPATH"
               go test ./...
               go test -race ./...
+              node --check internal/web/static/assets/app.js
               runHook postBuild
             '';
             installPhase = ''

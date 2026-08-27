@@ -101,12 +101,16 @@ let
         dashboard.serviceConfig.ProtectHome == true
         && dashboard.serviceConfig.RuntimeDirectory == "codex-usage-dashboard"
         && dashboard.serviceConfig.RuntimeDirectoryMode == "0750"
+        && dashboard.serviceConfig.StateDirectory == "codex-usage-dashboard"
+        && dashboard.serviceConfig.StateDirectoryMode == "0700"
+        && dashboard.serviceConfig.UMask == "0077"
+        && dashboard.serviceConfig.ReadWritePaths == [ "/run/codex-usage-dashboard" ]
         && dashboard.serviceConfig.IPAddressDeny == "any"
         && dashboard.serviceConfig.IPAddressAllow == [ "localhost" ];
       message = "the dashboard hardening and runtime-directory permissions changed";
     }
     {
-      assertion = lib.hasInfix "serve --listen 127.0.0.1:8787 --allowed-host itphlies.tailb3264.ts.net --socket /run/codex-usage-dashboard/ingest.sock --stale-after 90s --user codex --user codex-1 --user codex-2 --user codex-3 --user lcnbr --user nfink --user vhirschi --user zeno" dashboard.serviceConfig.ExecStart;
+      assertion = lib.hasInfix "serve --listen 127.0.0.1:8787 --allowed-host itphlies.tailb3264.ts.net --socket /run/codex-usage-dashboard/ingest.sock --stale-after 90s --history-file /var/lib/codex-usage-dashboard/history.json --history-retention 1344h --user codex --user codex-1 --user codex-2 --user codex-3 --user lcnbr --user nfink --user vhirschi --user zeno" dashboard.serviceConfig.ExecStart;
       message = "the dashboard command-line contract changed";
     }
     {
@@ -117,6 +121,8 @@ let
           home = "/home/${user}";
         in
         unit.serviceConfig.User == user
+        && unit.serviceConfig.SupplementaryGroups == [ "codex-usage-dashboard" ]
+        && unit.serviceConfig.UMask == "0077"
         && unit.environment.HOME == home
         && unit.environment.CODEX_HOME == "${home}/.codex"
         && unit.serviceConfig.ProtectHome == "tmpfs"
@@ -124,6 +130,7 @@ let
         && unit.serviceConfig.BindPaths == [ "${home}/.codex" ]
         && builtins.elem "AF_INET" unit.serviceConfig.RestrictAddressFamilies
         && builtins.elem "AF_INET6" unit.serviceConfig.RestrictAddressFamilies
+        && builtins.elem "AF_UNIX" unit.serviceConfig.RestrictAddressFamilies
         && builtins.elem "codex-usage-dashboard.service" unit.requires
         && builtins.elem "multi-user.target" unit.wantedBy
         && lib.hasInfix "collector --username ${user}" unit.serviceConfig.ExecStart

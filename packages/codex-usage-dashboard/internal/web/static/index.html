@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <meta name="description" content="Private Codex account usage and reset windows for this machine.">
+  <meta name="description" content="Private rolling Codex reset history and main weekly usage for this machine.">
   <title>Codex capacity</title>
   <link rel="stylesheet" href="/assets/styles.css">
 </head>
@@ -29,10 +29,10 @@
       <section class="hero" aria-labelledby="page-title">
         <div>
           <p class="eyebrow">Private machine overview</p>
-          <h1 id="page-title">All accounts.<br><span>One clear view.</span></h1>
+          <h1 id="page-title">Weekly resets.<br><span>One clean roster.</span></h1>
         </div>
         <div class="hero-meta">
-          <p>Live ChatGPT quota windows from each isolated local Codex session.</p>
+          <p>Anchored weekly reset windows and the canonical Codex allowance from each isolated local session.</p>
           <div class="privacy-chip">
             <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 1.5 3.5 4v4.8c0 4.1 2.7 7.8 6.5 9.7 3.8-1.9 6.5-5.6 6.5-9.7V4L10 1.5Zm0 3.1a2.4 2.4 0 0 1 2.4 2.4v1h.7v4.6H6.9V8h.7V7A2.4 2.4 0 0 1 10 4.6Zm0 1.3c-.6 0-1.1.5-1.1 1.1v1h2.2V7c0-.6-.5-1.1-1.1-1.1Z"/></svg>
             Tailnet only
@@ -44,28 +44,45 @@
         Preview data is active. No account information is being shown.
       </div>
 
-      <section class="section-heading" aria-labelledby="accounts-heading">
-        <div>
-          <p class="section-kicker">This machine</p>
-          <h2 id="accounts-heading">Account capacity</h2>
+      <section class="dashboard-section" aria-labelledby="timeline-heading">
+        <header class="section-heading">
+          <div>
+            <p class="section-kicker">Rolling weekly windows</p>
+            <h2 id="timeline-heading">Reset timeline</h2>
+            <p id="timeline-caption" class="section-copy">The next seven days are shown first. Scroll left for tracked history.</p>
+          </div>
+          <div class="timeline-actions" aria-label="Timeline controls">
+            <button id="timeline-earlier" class="quiet-button" type="button">Earlier</button>
+            <button id="timeline-now" class="quiet-button" type="button">Now</button>
+          </div>
+        </header>
+
+        <div id="timeline" class="timeline-scroll" role="region" aria-labelledby="timeline-heading" aria-describedby="timeline-caption" aria-busy="true" tabindex="0">
+          <div class="timeline-skeleton" aria-hidden="true"></div>
         </div>
-        <div class="updated-copy">Updated <time id="updated-at">—</time></div>
+        <p id="tracking-copy" class="tracking-copy">Reset history will begin with the first anchored window.</p>
       </section>
 
-      <section id="accounts" class="account-grid" aria-live="polite" aria-busy="true">
-        <article class="account-card skeleton-card"></article>
-        <article class="account-card skeleton-card"></article>
-        <article class="account-card skeleton-card"></article>
-        <article class="account-card skeleton-card"></article>
-        <article class="account-card skeleton-card"></article>
-        <article class="account-card skeleton-card"></article>
-        <article class="account-card skeleton-card"></article>
-        <article class="account-card skeleton-card"></article>
+      <section class="dashboard-section" aria-labelledby="accounts-heading">
+        <header class="section-heading">
+          <div>
+            <p class="section-kicker">Canonical quota only</p>
+            <h2 id="accounts-heading">Account overview</h2>
+            <p class="section-copy">One compact row per Linux user. Spark and other model-specific buckets are excluded.</p>
+          </div>
+          <div class="updated-copy">Updated <time id="updated-at">—</time></div>
+        </header>
+
+        <div id="accounts" class="account-table-wrap" role="region" aria-labelledby="accounts-heading" aria-busy="true" tabindex="0">
+          <div class="table-skeleton" aria-hidden="true"></div>
+        </div>
       </section>
+
+      <p id="screen-reader-status" class="visually-hidden" aria-live="polite"></p>
     </main>
 
     <footer>
-      <p>Percentages are reported by Codex App Server. Exact remaining message counts are not available.</p>
+      <p>Codex rounds usage to whole percentages. “0% reported” can include usage below 0.5%; exact message counts are unavailable.</p>
       <p class="footer-security"><span aria-hidden="true">●</span> No credentials leave their Linux account</p>
     </footer>
   </div>

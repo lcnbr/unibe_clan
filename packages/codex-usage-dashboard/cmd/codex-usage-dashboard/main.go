@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"codex-usage-dashboard/internal/collector"
+	usagehistory "codex-usage-dashboard/internal/history"
 	"codex-usage-dashboard/internal/hub"
 	"codex-usage-dashboard/internal/web"
 )
@@ -103,6 +104,8 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	listenAddress := flags.String("listen", "127.0.0.1:8787", "literal loopback HTTP address")
 	socketPath := flags.String("socket", "/run/codex-usage-dashboard/ingest.sock", "collector ingest Unix socket")
 	staleAfter := flags.Duration("stale-after", 90*time.Second, "age after which last-good data is stale")
+	historyFile := flags.String("history-file", "", "absolute file for retained reset history (empty keeps history in memory)")
+	historyRetention := flags.Duration("history-retention", 56*24*time.Hour, "completed reset history retention")
 	maxPayload := flags.Int64("max-payload", 64<<10, "maximum snapshot size in bytes")
 	demo := flags.Bool("demo", false, "seed preview-only account data")
 	additionalAllowedHosts := hostList{}
@@ -134,6 +137,9 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	if *socketPath == "" || !filepath.IsAbs(*socketPath) {
 		return errors.New("ingest socket must be an absolute path")
 	}
+	if *historyFile != "" && !filepath.IsAbs(*historyFile) {
+		return errors.New("history file must be an absolute path")
+	}
 	if *maxPayload < 1024 || *maxPayload > 1<<20 {
 		return errors.New("max-payload must be between 1024 and 1048576 bytes")
 	}
@@ -146,6 +152,15 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	if err != nil {
 		return err
 	}
+	historyUsernames := make([]string, 0, len(identities))
+	for _, identity := range identities {
+		historyUsernames = append(historyUsernames, identity.Username)
+	}
+	retainedHistory, err := usagehistory.Open(*historyFile, historyUsernames, *historyRetention)
+	if err != nil {
+		return err
+	}
+	state.SetHistory(retainedHistory)
 	if *demo {
 		state.SeedDemo()
 	}
@@ -153,6 +168,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	allowedHosts := append([]string{listenHost}, additionalAllowedHosts...)
 	handler, err := (hub.HTTPHandler{
 		Hub:          state,
+		History:      retainedHistory,
 		Assets:       web.Files(),
 		AllowedHosts: allowedHosts,
 	}).Handler()

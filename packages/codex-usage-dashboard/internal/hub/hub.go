@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	usagehistory "codex-usage-dashboard/internal/history"
 	"codex-usage-dashboard/internal/model"
 )
 
@@ -22,6 +23,7 @@ type entry struct {
 }
 
 type Hub struct {
+	applyMu    sync.Mutex
 	mu         sync.RWMutex
 	order      []string
 	byUID      map[uint32]string
@@ -32,6 +34,15 @@ type Hub struct {
 	revision   uint64
 	nextSubID  uint64
 	subs       map[uint64]chan model.StatusResponse
+	history    *usagehistory.Tracker
+}
+
+func (h *Hub) SetHistory(tracker *usagehistory.Tracker) {
+	h.applyMu.Lock()
+	defer h.applyMu.Unlock()
+	h.mu.Lock()
+	h.history = tracker
+	h.mu.Unlock()
 }
 
 func New(identities []Identity, staleAfter time.Duration) (*Hub, error) {
@@ -81,27 +92,36 @@ func (h *Hub) SetDemo(enabled bool) {
 }
 
 func (h *Hub) Apply(uid uint32, incoming model.Snapshot) error {
-	h.mu.Lock()
+	h.applyMu.Lock()
+	defer h.applyMu.Unlock()
+
+	h.mu.RLock()
 	username, ok := h.byUID[uid]
+	tracker := h.history
+	h.mu.RUnlock()
 	if !ok {
-		h.mu.Unlock()
 		return fmt.Errorf("untrusted collector UID %d", uid)
 	}
 	if incoming.Username != username {
-		h.mu.Unlock()
 		return fmt.Errorf("collector UID %d cannot submit as %q", uid, incoming.Username)
 	}
 	if err := incoming.Validate(); err != nil {
-		h.mu.Unlock()
 		return fmt.Errorf("invalid snapshot: %w", err)
 	}
 	incoming = cloneSnapshot(incoming)
+	if tracker != nil {
+		// Persistence may fsync. Keep it outside h.mu so status and SSE readers
+		// remain available; applyMu preserves collector update order.
+		tracker.Observe(incoming)
+	}
 
+	h.mu.Lock()
 	now := h.now().UTC()
 	current := h.entries[username]
 	if incoming.State == model.StateUnavailable && current.lastGoodAt != nil {
 		// Preserve useful account/limit data while making the current failure explicit.
 		incoming.Account = cloneAccount(current.snapshot.Account)
+		incoming.MainUsage = cloneWindow(current.snapshot.MainUsage)
 		incoming.Limits = cloneLimits(current.snapshot.Limits)
 		incoming.ObservedAt = current.snapshot.ObservedAt
 	} else {
@@ -219,6 +239,9 @@ func (h *Hub) SeedDemo() {
 			State:         model.StateOK,
 			Account:       &model.Account{Type: "chatgpt", Email: &email, PlanType: plan},
 			ObservedAt:    base,
+			MainUsage: &model.Window{
+				UsedPercent: identity.used / 2, WindowDurationMins: &longWindow, ResetsAt: &resetSecondary,
+			},
 			Limits: []model.RateLimit{{
 				ID:       "codex",
 				Name:     &name,
@@ -307,6 +330,22 @@ func cloneLimits(value []model.RateLimit) []model.RateLimit {
 	return copy
 }
 
+func cloneWindow(value *model.Window) *model.Window {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	if value.WindowDurationMins != nil {
+		duration := *value.WindowDurationMins
+		copy.WindowDurationMins = &duration
+	}
+	if value.ResetsAt != nil {
+		reset := *value.ResetsAt
+		copy.ResetsAt = &reset
+	}
+	return &copy
+}
+
 func cloneAccount(value *model.Account) *model.Account {
 	if value == nil {
 		return nil
@@ -321,6 +360,7 @@ func cloneAccount(value *model.Account) *model.Account {
 
 func cloneSnapshot(value model.Snapshot) model.Snapshot {
 	value.Account = cloneAccount(value.Account)
+	value.MainUsage = cloneWindow(value.MainUsage)
 	value.Limits = cloneLimits(value.Limits)
 	return value
 }

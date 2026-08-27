@@ -71,6 +71,7 @@ type Snapshot struct {
 	Username      string      `json:"username"`
 	State         State       `json:"state"`
 	Account       *Account    `json:"account,omitempty"`
+	MainUsage     *Window     `json:"mainUsage,omitempty"`
 	Limits        []RateLimit `json:"limits"`
 	ObservedAt    time.Time   `json:"observedAt"`
 	ErrorCategory string      `json:"errorCategory,omitempty"`
@@ -103,6 +104,7 @@ var allowedErrors = map[string]bool{
 
 func (s *Snapshot) Normalize() {
 	s.SchemaVersion = SchemaVersion
+	normalizeWindow(s.MainUsage)
 	for i := range s.Limits {
 		normalizeWindow(s.Limits[i].Primary)
 		normalizeWindow(s.Limits[i].Secondary)
@@ -172,15 +174,15 @@ func (s Snapshot) Validate() error {
 		if s.Account == nil || s.Account.Type != "apiKey" {
 			return errors.New("api-key state requires an apiKey account")
 		}
-		if len(s.Limits) != 0 || s.ErrorCategory != "" {
+		if s.MainUsage != nil || len(s.Limits) != 0 || s.ErrorCategory != "" {
 			return errors.New("api-key state cannot include limits or an error category")
 		}
 	case StateSignedOut:
-		if s.Account != nil || len(s.Limits) != 0 || s.ErrorCategory != "" {
+		if s.Account != nil || s.MainUsage != nil || len(s.Limits) != 0 || s.ErrorCategory != "" {
 			return errors.New("signed-out state cannot include account data, limits, or errors")
 		}
 	case StateUnavailable:
-		if s.Account != nil || len(s.Limits) != 0 {
+		if s.Account != nil || s.MainUsage != nil || len(s.Limits) != 0 {
 			return errors.New("unavailable state cannot submit account data or limits")
 		}
 		if s.ErrorCategory == "" {
@@ -202,6 +204,20 @@ func (s Snapshot) Validate() error {
 	}
 	if len(s.Limits) > 32 {
 		return errors.New("too many rate-limit buckets")
+	}
+	if s.MainUsage != nil {
+		if err := validateWindow(s.MainUsage); err != nil {
+			return fmt.Errorf("main usage: %w", err)
+		}
+		if s.MainUsage.WindowDurationMins == nil || *s.MainUsage.WindowDurationMins != 10_080 {
+			return errors.New("main usage must be the canonical weekly window")
+		}
+		if s.MainUsage.ResetsAt == nil || *s.MainUsage.ResetsAt <= s.ObservedAt.Unix() {
+			return errors.New("main usage requires a future reset timestamp")
+		}
+		if *s.MainUsage.ResetsAt-10_080*60 <= 0 {
+			return errors.New("main usage has an invalid weekly window start")
+		}
 	}
 	seenLimitIDs := make(map[string]bool, len(s.Limits))
 	for i := range s.Limits {
@@ -233,17 +249,8 @@ func (l RateLimit) validate() error {
 		if w == nil {
 			continue
 		}
-		if w.UsedPercent < 0 || w.UsedPercent > 100 || w.RemainingPercent < 0 || w.RemainingPercent > 100 {
-			return errors.New("percentage outside 0..100")
-		}
-		if w.UsedPercent+w.RemainingPercent != 100 {
-			return errors.New("used and remaining percentages do not total 100")
-		}
-		if w.WindowDurationMins != nil && (*w.WindowDurationMins <= 0 || *w.WindowDurationMins > 5_256_000) {
-			return errors.New("invalid window duration")
-		}
-		if w.ResetsAt != nil && (*w.ResetsAt <= 0 || *w.ResetsAt > 32_503_680_000) {
-			return errors.New("invalid reset timestamp")
+		if err := validateWindow(w); err != nil {
+			return err
 		}
 	}
 	if l.Credits != nil && l.Credits.Balance != nil {
@@ -264,6 +271,22 @@ func (l RateLimit) validate() error {
 		if l.IndividualLimit.ResetsAt <= 0 || l.IndividualLimit.ResetsAt > 32_503_680_000 {
 			return errors.New("invalid individual reset timestamp")
 		}
+	}
+	return nil
+}
+
+func validateWindow(w *Window) error {
+	if w.UsedPercent < 0 || w.UsedPercent > 100 || w.RemainingPercent < 0 || w.RemainingPercent > 100 {
+		return errors.New("percentage outside 0..100")
+	}
+	if w.UsedPercent+w.RemainingPercent != 100 {
+		return errors.New("used and remaining percentages do not total 100")
+	}
+	if w.WindowDurationMins != nil && (*w.WindowDurationMins <= 0 || *w.WindowDurationMins > 5_256_000) {
+		return errors.New("invalid window duration")
+	}
+	if w.ResetsAt != nil && (*w.ResetsAt <= 0 || *w.ResetsAt > 32_503_680_000) {
+		return errors.New("invalid reset timestamp")
 	}
 	return nil
 }

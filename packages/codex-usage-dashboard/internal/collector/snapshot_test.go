@@ -105,3 +105,44 @@ func TestSanitizeLimitsCapsBucketsAndText(t *testing.T) {
 		seen[limit.ID] = true
 	}
 }
+
+func TestSanitizeMainUsageUsesOnlyCanonicalTopLevelWeeklyWindow(t *testing.T) {
+	shortDuration := int64(300)
+	weeklyDuration := int64(10_080)
+	reset := int64(1_800_000_000)
+	sparkName := "GPT-5.3-Codex-Spark"
+	response := codex.RateLimitsResponse{
+		RateLimits: codex.RateLimitSnapshot{
+			Primary: &codex.RateLimitWindow{
+				UsedPercent: 88, WindowDurationMins: &shortDuration, ResetsAt: &reset,
+			},
+			Secondary: &codex.RateLimitWindow{
+				UsedPercent: 37, WindowDurationMins: &weeklyDuration, ResetsAt: &reset,
+			},
+		},
+		RateLimitsByLimitID: map[string]codex.RateLimitSnapshot{
+			"codex_bengalfox": {
+				LimitName: &sparkName,
+				Secondary: &codex.RateLimitWindow{
+					UsedPercent: 91, WindowDurationMins: &weeklyDuration, ResetsAt: &reset,
+				},
+			},
+			"gpt-reserve": {
+				Primary: &codex.RateLimitWindow{
+					UsedPercent: 55, WindowDurationMins: &weeklyDuration, ResetsAt: &reset,
+				},
+			},
+		},
+	}
+
+	got := sanitizeMainUsage(response)
+	if got == nil || got.UsedPercent != 37 || got.WindowDurationMins == nil ||
+		*got.WindowDurationMins != weeklyDuration {
+		t.Fatalf("canonical main usage = %#v", got)
+	}
+
+	response.RateLimits.Secondary = nil
+	if got := sanitizeMainUsage(response); got != nil {
+		t.Fatalf("map bucket was used as canonical fallback: %#v", got)
+	}
+}

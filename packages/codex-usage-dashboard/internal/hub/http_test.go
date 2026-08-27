@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	usagehistory "codex-usage-dashboard/internal/history"
 	"codex-usage-dashboard/internal/model"
 )
 
@@ -112,6 +113,44 @@ func TestSSEStartsWithSnapshotAndReconnects(t *testing.T) {
 	second := readInitial()
 	if len(first.Accounts) != 1 || len(second.Accounts) != 1 {
 		t.Fatal("reconnect did not receive an immediate full state")
+	}
+}
+
+func TestHistoryEndpointIsReadOnlyAndOmitsAccountIdentity(t *testing.T) {
+	retained, err := usagehistory.Open("", []string{"codex"}, 14*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, _ := New([]Identity{{Username: "codex", UID: 123}}, time.Minute)
+	server := httptest.NewServer(testHTTPHandler(t, HTTPHandler{Hub: state, History: retained}))
+	defer server.Close()
+
+	response, err := http.Get(server.URL + "/api/v1/history")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(payload), `"username":"codex"`) {
+		t.Fatalf("unexpected history response: status=%d body=%q", response.StatusCode, payload)
+	}
+	for _, forbidden := range []string{"email", "planType", "credits", "Spark"} {
+		if strings.Contains(string(payload), forbidden) {
+			t.Fatalf("history response contains %q", forbidden)
+		}
+	}
+
+	request, _ := http.NewRequest(http.MethodPost, server.URL+"/api/v1/history", nil)
+	response, err = http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusMethodNotAllowed || response.Header.Get("Allow") != "GET" {
+		t.Fatalf("POST history status = %d Allow %q", response.StatusCode, response.Header.Get("Allow"))
 	}
 }
 

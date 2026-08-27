@@ -20,8 +20,9 @@ third-party request.
 The UI has two coordinated views:
 
 - a horizontally scrollable weekly timeline with one lane per Linux user,
-  anchored next resets, completed reset history, and an honest “starts on next
-  use” state for unused windows whose reset timestamp is still moving; and
+  anchored next resets, completed reset history, amber server-adjustment
+  markers, and an honest “starts on next use” state for unused windows whose
+  reset timestamp is still moving; and
 - a compact one-row-per-user account overview with the full ChatGPT email,
   plan, canonical main weekly usage, reset countdown, freshness, and state.
 
@@ -30,7 +31,7 @@ collector takes main usage only from App Server's authoritative top-level
 `rateLimits` value and requires an exact 10,080-minute window. The detailed
 `GET /api/v1/status` response continues to contain all sanitized buckets for
 diagnostics, while `GET /api/v1/history` contains only usernames and reset
-window metadata.
+window/adjustment metadata.
 
 Codex App Server exposes rounded whole-number percentages and reset windows.
 It does not expose a reliable exact count of messages remaining, so the
@@ -73,6 +74,20 @@ generating false resets every 30 seconds. Tracking begins after this version is
 activated; history is not reconstructed retroactively. The state survives
 service restarts, NixOS switches, and reboots, but it is not a backup.
 
+Server-reported adjustments are retained separately in the mode-0600
+`history-adjustments.json` sidecar. An adjustment is recorded only when an
+anchored reset timestamp changes by more than two minutes and the change is
+observed more than two minutes before its scheduled boundary, or when the
+reported usage percentage decreases inside the same anchored window. Smaller
+timestamp differences are ignored as clock/rounding jitter; any non-equivalent
+reset report inside the boundary band is treated as the normal window rollover.
+A single event can contain both observations. Routine upward usage changes are
+not recorded. The collector reacts immediately to App Server's rate-limit
+notification and also polls, so the marker records when this service first
+observed the changed response; it does not claim to know why OpenAI made
+the change. Keeping adjustments in a separate sidecar leaves the core
+`history.json` disk schema compatible with the previous deployed generation.
+
 ### Privacy and security properties
 
 - A collector stats its own `~/.codex/auth.json` metadata but never opens or
@@ -80,9 +95,10 @@ service restarts, NixOS switches, and reboots, but it is not a backup.
   state inside the collector user's service.
 - Tokens, account IDs, opaque credit IDs, raw JSON-RPC payloads, and raw errors
   are not part of the ingest schema and are not logged.
-- Reset history contains only the fixed Linux username, reset timestamps, and
-  rounded main weekly usage. Its state directory is mode `0700` and its file
-  is mode `0600`, so collector users cannot read it.
+- Reset and adjustment history contain only the fixed Linux username, reset
+  timestamps, observation times, and rounded main weekly usage. The state
+  directory is mode `0700` and both files are mode `0600`, so collector users
+  cannot read them.
 - The Unix ingest socket is inside a mode-`0750` runtime directory. Snapshot
   size, schema, allowed fields, UID, and claimed username are checked.
 - The dashboard has `ProtectHome=true`, no home-directory bind, and an
@@ -189,7 +205,54 @@ sudo nixos-rebuild dry-activate --no-reexec --store-path "$system_path"
 sudo nixos-rebuild test --no-reexec --store-path "$system_path"
 test "$(readlink -f /run/current-system)" = "$system_path"
 test "$(readlink -f /nix/var/nix/profiles/system)" = "$old_profile"
-# Verify the nine services and local health endpoint, then make it persistent.
+
+candidate_healthy=false
+for _attempt in {1..30}; do
+  if curl --fail --silent http://127.0.0.1:8787/healthz >/dev/null; then
+    candidate_healthy=true
+    break
+  fi
+  sleep 1
+done
+test "$candidate_healthy" = true
+
+state_dir=/var/lib/codex-usage-dashboard
+main_history="$state_dir/history.json"
+adjustment_history="$state_dir/history-adjustments.json"
+test "$(sudo stat -c '%a %U %G' "$state_dir")" = \
+  '700 codex-usage-dashboard codex-usage-dashboard'
+test "$(sudo stat -c '%a %U %G' "$main_history")" = \
+  '600 codex-usage-dashboard codex-usage-dashboard'
+test "$(sudo stat -c '%a %U %G' "$adjustment_history")" = \
+  '600 codex-usage-dashboard codex-usage-dashboard'
+sudo jq -e '.schemaVersion == 1' "$main_history" >/dev/null
+sudo jq -e '.schemaVersion == 1' "$adjustment_history" >/dev/null
+curl --fail --silent http://127.0.0.1:8787/api/v1/history |
+  jq -e '.schemaVersion == 2 and ((.degraded // false) == false)' >/dev/null
+
+# Prove the exact previous generation still reads v1 history and ignores the
+# sidecar, then return to the candidate before making it persistent.
+adjustment_checksum="$(sudo sha256sum "$adjustment_history" | cut -d' ' -f1)"
+sudo nixos-rebuild test --no-reexec --store-path "$old_system"
+test "$(readlink -f /run/current-system)" = "$old_system"
+test "$(readlink -f /nix/var/nix/profiles/system)" = "$old_profile"
+curl --fail --silent http://127.0.0.1:8787/healthz >/dev/null
+sudo jq -e '.schemaVersion == 1' "$main_history" >/dev/null
+test "$(sudo sha256sum "$adjustment_history" | cut -d' ' -f1)" = \
+  "$adjustment_checksum"
+sudo nixos-rebuild test --no-reexec --store-path "$system_path"
+test "$(readlink -f /run/current-system)" = "$system_path"
+test "$(readlink -f /nix/var/nix/profiles/system)" = "$old_profile"
+curl --fail --silent http://127.0.0.1:8787/healthz >/dev/null
+
+# Verify all nine services, then make this exact candidate persistent.
+active_unit_count="$(
+  sudo systemctl is-active \
+    codex-usage-dashboard.service \
+    'codex-usage-collector-*.service' |
+    grep -c '^active$'
+)"
+test "$active_unit_count" -eq 9
 sudo nixos-rebuild switch --no-reexec --store-path "$system_path"
 test "$(readlink -f /run/current-system)" = "$system_path"
 test "$(readlink -f /nix/var/nix/profiles/system)" = "$system_path"
@@ -201,6 +264,9 @@ they do not automatically restore the previous live system. The `ERR` trap keeps
 the original paths in scope and restores that exact closure if candidate
 activation or verification fails. After recovery, rerun the unit, listener, and
 health checks against the restored system before attempting another activation.
+The brief compatibility rehearsal cannot record adjustments that occur while
+the old binary is active; existing sidecar events remain untouched and reappear
+when the candidate is reactivated.
 
 Do not substitute a generic `nixos-rebuild --rollback`; it may select a
 different older generation.

@@ -3,10 +3,14 @@
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAIN_WEEK_MINUTES = 10080;
 const MAX_HISTORY_DAYS = 56;
+const HISTORY_SCHEMA_VERSION = 2;
+const RESET_TIMESTAMP_CHANGED = "reset_timestamp_changed";
+const USED_PERCENT_DECREASED = "used_percent_decreased";
 
 const accountsRoot = document.getElementById("accounts");
 const timelineRoot = document.getElementById("timeline");
 const trackingCopy = document.getElementById("tracking-copy");
+const adjustmentDetail = document.getElementById("adjustment-detail");
 const updatedAt = document.getElementById("updated-at");
 const demoBanner = document.getElementById("demo-banner");
 const connectionDot = document.getElementById("connection-dot");
@@ -23,6 +27,8 @@ let timelineRange = null;
 let latestStatusRevision = -1;
 let latestHistoryRevision = -1;
 let lastAnnouncementSignature = "";
+let knownAdjustmentIDs = null;
+const adjustmentDetailDefault = "Focus or tap an amber marker to inspect the server-reported before and after values.";
 
 function node(tag, className, text) {
   const element = document.createElement(tag);
@@ -151,6 +157,72 @@ function historyFor(username) {
     return null;
   }
   return historyStatus.accounts.find((entry) => entry.username === username) || null;
+}
+
+function adjustmentsFor(username) {
+  const history = historyFor(username);
+  return history && Array.isArray(history.adjustments) ? history.adjustments : [];
+}
+
+function adjustmentID(username, adjustment) {
+  const before = adjustment && adjustment.before ? adjustment.before : {};
+  const after = adjustment && adjustment.after ? adjustment.after : {};
+  return [username, adjustment && adjustment.detectedAt, before.resetsAt, after.resetsAt,
+    before.usedPercent, after.usedPercent].join(":");
+}
+
+function adjustmentUsageLabel(value) {
+  const used = Number(value) || 0;
+  return used === 0 ? "0% reported" : `approximately ${used}% used`;
+}
+
+function adjustmentDescription(adjustment, compact = false) {
+  if (!adjustment || !adjustment.before || !adjustment.after) {
+    return "Server adjustment details unavailable";
+  }
+  const reasons = Array.isArray(adjustment.reasons) ? adjustment.reasons : [];
+  const parts = [];
+  if (reasons.includes(RESET_TIMESTAMP_CHANGED)) {
+    if (compact) {
+      parts.push(`Reset ${formatClock(adjustment.before.resetsAt)} → ${formatClock(adjustment.after.resetsAt)}`);
+    } else {
+      parts.push(`Reset adjusted from ${formatClock(adjustment.before.resetsAt)} to ${formatClock(adjustment.after.resetsAt)}`);
+    }
+  }
+  if (reasons.includes(USED_PERCENT_DECREASED)) {
+    if (compact) {
+      parts.push(`${adjustmentUsageLabel(adjustment.before.usedPercent)} → ${adjustmentUsageLabel(adjustment.after.usedPercent)}`);
+    } else {
+      parts.push(`Usage revised from ${adjustmentUsageLabel(adjustment.before.usedPercent)} to ${adjustmentUsageLabel(adjustment.after.usedPercent)}`);
+    }
+  }
+  const detected = validDate(adjustment.detectedAt);
+  const detectedText = detected ? detected.toLocaleString() : "an unknown time";
+  if (compact) {
+    return `${parts.join(" · ")} · detected ${detectedText}`;
+  }
+  return `${parts.join(". ")}. Detected ${detectedText}.`;
+}
+
+function showAdjustmentDetail(account, adjustment) {
+  adjustmentDetail.textContent = `${account.username}: ${adjustmentDescription(adjustment, true)}`;
+  adjustmentDetail.classList.add("is-active");
+}
+
+function resetAdjustmentDetail() {
+  adjustmentDetail.textContent = adjustmentDetailDefault;
+  adjustmentDetail.classList.remove("is-active");
+}
+
+function restoreFocusedAdjustmentDetail() {
+  const focused = document.activeElement;
+  if (focused && focused.classList && focused.classList.contains("adjustment-marker") &&
+      focused.dataset.adjustmentDetail) {
+    adjustmentDetail.textContent = focused.dataset.adjustmentDetail;
+    adjustmentDetail.classList.add("is-active");
+    return;
+  }
+  resetAdjustmentDetail();
 }
 
 function isFloatingUnusedWindow(account, windowValue) {
@@ -372,6 +444,12 @@ function timelineGeometry(accounts) {
         earliest = Math.min(earliest, Math.max(oldestAllowed, started));
       }
     });
+    adjustmentsFor(account.username).forEach((adjustment) => {
+      const detected = validDate(adjustment.detectedAt);
+      if (detected) {
+        earliest = Math.min(earliest, Math.max(oldestAllowed, detected.getTime()));
+      }
+    });
   });
   const start = localDayStart(earliest).getTime();
   const end = now + 7 * DAY_MS;
@@ -381,6 +459,39 @@ function timelineGeometry(accounts) {
   const pixelsPerMs = dayWidth / DAY_MS;
   const width = labelWidth + Math.ceil((end - start) * pixelsPerMs);
   return { start, end, labelWidth, dayWidth, pixelsPerMs, width };
+}
+
+function renderTimelineAdjustment(lane, adjustment, geometry, account) {
+  const detected = validDate(adjustment && adjustment.detectedAt);
+  if (!detected || detected.getTime() < geometry.start || detected.getTime() > geometry.end) {
+    return;
+  }
+  const marker = node("button", "adjustment-marker");
+  marker.type = "button";
+  marker.style.left = `${timelineLeft(detected.getTime(), geometry)}px`;
+  marker.dataset.adjustmentId = adjustmentID(account.username, adjustment);
+  marker.dataset.adjustmentDetail = `${account.username}: ${adjustmentDescription(adjustment, true)}`;
+  marker.setAttribute("aria-label", `${account.username}. ${adjustmentDescription(adjustment)}`);
+  marker.setAttribute("aria-controls", "adjustment-detail");
+  const diamond = node("span", "adjustment-diamond");
+  diamond.setAttribute("aria-hidden", "true");
+  marker.append(diamond);
+  marker.addEventListener("mouseenter", () => showAdjustmentDetail(account, adjustment));
+  marker.addEventListener("mouseleave", () => {
+    if (document.activeElement !== marker) {
+      restoreFocusedAdjustmentDetail();
+    }
+  });
+  marker.addEventListener("focus", () => showAdjustmentDetail(account, adjustment));
+  marker.addEventListener("blur", resetAdjustmentDetail);
+  marker.addEventListener("click", () => showAdjustmentDetail(account, adjustment));
+  marker.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      marker.blur();
+    }
+  });
+  lane.append(marker);
 }
 
 function timelineLeft(timestamp, geometry) {
@@ -432,12 +543,16 @@ function renderTimeline() {
   }
 
   let anchorTimestamp = null;
+  const focusedAdjustmentID = document.activeElement && document.activeElement.dataset
+    ? document.activeElement.dataset.adjustmentId || null
+    : null;
   if (timelineInitialized && timelineRange) {
     anchorTimestamp = timelineRange.start
       + Math.max(0, timelineRoot.scrollLeft) / timelineRange.pixelsPerMs;
   }
 
   const geometry = timelineGeometry(currentStatus.accounts);
+  resetAdjustmentDetail();
   const canvas = node("div", "timeline-canvas");
   canvas.style.width = `${geometry.width}px`;
   canvas.style.setProperty("--label-width", `${geometry.labelWidth}px`);
@@ -472,6 +587,8 @@ function renderTimeline() {
 
     const windows = resetWindowsFor(account);
     windows.forEach((windowValue) => renderTimelineWindow(lane, windowValue, geometry, account));
+    const adjustments = adjustmentsFor(account.username);
+    adjustments.forEach((adjustment) => renderTimelineAdjustment(lane, adjustment, geometry, account));
 
     if (windows.length === 0) {
       const empty = node("span", "lane-empty", usage ? "No fixed reset" : "No weekly data");
@@ -487,7 +604,13 @@ function renderTimeline() {
     const historySummary = completed.length > 0
       ? ` ${completed.length} completed reset${completed.length === 1 ? "" : "s"} tracked; most recent ${formatClock(completed[completed.length - 1].resetsAt)}.`
       : " No completed resets tracked yet.";
-    accessible.textContent = currentSummary + historySummary;
+    const recentAdjustmentAt = adjustments.length > 0
+      ? validDate(adjustments[adjustments.length - 1].detectedAt)
+      : null;
+    const adjustmentSummary = adjustments.length > 0
+      ? ` ${adjustments.length} server adjustment${adjustments.length === 1 ? "" : "s"} tracked; most recent detected ${recentAdjustmentAt ? recentAdjustmentAt.toLocaleString() : "at an unknown time"}.`
+      : " No server adjustments tracked yet.";
+    accessible.textContent = currentSummary + historySummary + adjustmentSummary;
     lane.append(accessible);
     canvas.append(lane);
   });
@@ -510,15 +633,24 @@ function renderTimeline() {
     timelineRoot.scrollLeft = restored;
   }
 
+  if (focusedAdjustmentID) {
+    const marker = Array.from(timelineRoot.querySelectorAll("[data-adjustment-id]"))
+      .find((candidate) => candidate.dataset.adjustmentId === focusedAdjustmentID);
+    if (marker) {
+      marker.focus({ preventScroll: true });
+    }
+  }
+
   if (historyStatus && historyStatus.degraded) {
     trackingCopy.textContent = "Live usage is available, but reset history could not be saved. The service will retry automatically.";
     trackingCopy.classList.add("warning-copy");
   } else if (historyStatus && historyStatus.trackingSince) {
     trackingCopy.classList.remove("warning-copy");
     const since = validDate(historyStatus.trackingSince);
+    const adjustmentsSince = validDate(historyStatus.adjustmentsTrackingSince);
     trackingCopy.textContent = since
-      ? `History tracked since ${since.toLocaleString()}. Scroll left to review completed weekly windows.`
-      : "Scroll left to review completed weekly windows.";
+      ? `Reset history since ${since.toLocaleString()}; server adjustments since ${adjustmentsSince ? adjustmentsSince.toLocaleString() : since.toLocaleString()}. Retained for ${historyStatus.retentionDays || MAX_HISTORY_DAYS} days.`
+      : "Scroll left to review completed weekly windows and server adjustments.";
   } else {
     trackingCopy.classList.remove("warning-copy");
     trackingCopy.textContent = "Reset history begins when the first weekly window becomes anchored.";
@@ -595,7 +727,7 @@ function acceptStatus(status) {
 }
 
 function acceptHistory(history) {
-  if (!history || history.schemaVersion !== 1 || !Array.isArray(history.accounts)) {
+  if (!history || ![1, HISTORY_SCHEMA_VERSION].includes(history.schemaVersion) || !Array.isArray(history.accounts)) {
     return;
   }
   const incomingGenerated = validDate(history.generatedAt);
@@ -610,6 +742,26 @@ function acceptHistory(history) {
     return;
   }
   latestHistoryRevision = Number.isFinite(revision) ? revision : latestHistoryRevision;
+  const incomingAdjustmentIDs = new Set();
+  history.accounts.forEach((account) => {
+    if (Array.isArray(account.adjustments)) {
+      account.adjustments.forEach((adjustment) => {
+        incomingAdjustmentIDs.add(adjustmentID(account.username, adjustment));
+      });
+    }
+  });
+  if (knownAdjustmentIDs !== null) {
+    let added = 0;
+    incomingAdjustmentIDs.forEach((id) => {
+      if (!knownAdjustmentIDs.has(id)) {
+        added++;
+      }
+    });
+    if (added > 0) {
+      screenReaderStatus.textContent = `${added} new server adjustment${added === 1 ? "" : "s"} recorded.`;
+    }
+  }
+  knownAdjustmentIDs = incomingAdjustmentIDs;
   historyStatus = history;
   if (currentStatus) {
     renderTimeline();

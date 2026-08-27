@@ -51,16 +51,20 @@
             <h2 id="timeline-heading">Reset timeline</h2>
             <p id="timeline-caption" class="section-copy">The next seven days are shown first. Scroll left for tracked history.</p>
           </div>
-          <div class="timeline-actions" aria-label="Timeline controls">
-            <button id="timeline-earlier" class="quiet-button" type="button">Earlier</button>
-            <button id="timeline-now" class="quiet-button" type="button">Now</button>
+          <div class="timeline-tools">
+            <span class="timeline-legend"><span class="legend-diamond" aria-hidden="true"></span> Server adjustment</span>
+            <div class="timeline-actions" aria-label="Timeline controls">
+              <button id="timeline-earlier" class="quiet-button" type="button">Earlier</button>
+              <button id="timeline-now" class="quiet-button" type="button">Now</button>
+            </div>
           </div>
         </header>
 
         <div id="timeline" class="timeline-scroll" role="region" aria-labelledby="timeline-heading" aria-describedby="timeline-caption" aria-busy="true" tabindex="0">
           <div class="timeline-skeleton" aria-hidden="true"></div>
         </div>
-        <p id="tracking-copy" class="tracking-copy">Reset history will begin with the first anchored window.</p>
+        <p id="adjustment-detail" class="adjustment-detail">Focus or tap an amber marker to inspect the server-reported before and after values.</p>
+        <p id="tracking-copy" class="tracking-copy">Reset and server-adjustment history begins with this tracker.</p>
       </section>
 
       <section class="dashboard-section" aria-labelledby="accounts-heading">

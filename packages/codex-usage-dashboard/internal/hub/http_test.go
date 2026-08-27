@@ -134,10 +134,12 @@ func TestHistoryEndpointIsReadOnlyAndOmitsAccountIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.StatusCode != http.StatusOK || !strings.Contains(string(payload), `"username":"codex"`) {
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(payload), `"schemaVersion":2`) ||
+		!strings.Contains(string(payload), `"username":"codex"`) ||
+		!strings.Contains(string(payload), `"adjustments":[]`) {
 		t.Fatalf("unexpected history response: status=%d body=%q", response.StatusCode, payload)
 	}
-	for _, forbidden := range []string{"email", "planType", "credits", "Spark"} {
+	for _, forbidden := range []string{"email", "planType", "credits", "Spark", "coreRevisionBefore"} {
 		if strings.Contains(string(payload), forbidden) {
 			t.Fatalf("history response contains %q", forbidden)
 		}

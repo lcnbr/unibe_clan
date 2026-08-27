@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Private Codex account usage and reset windows for this machine.">
+  <title>Codex capacity</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <div class="page-shell">
+    <header class="masthead">
+      <div class="brand-lockup" aria-label="Codex capacity">
+        <span class="brand-mark" aria-hidden="true">
+          <span></span><span></span><span></span><span></span><span></span><span></span>
+        </span>
+        <span class="brand-name">Codex</span>
+        <span class="brand-divider" aria-hidden="true"></span>
+        <span class="brand-section">Capacity</span>
+      </div>
+      <div class="connection-wrap">
+        <span id="connection-dot" class="connection-dot" aria-hidden="true"></span>
+        <span id="connection-label">Connecting</span>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero" aria-labelledby="page-title">
+        <div>
+          <p class="eyebrow">Private machine overview</p>
+          <h1 id="page-title">All accounts.<br><span>One clear view.</span></h1>
+        </div>
+        <div class="hero-meta">
+          <p>Live ChatGPT quota windows from each isolated local Codex session.</p>
+          <div class="privacy-chip">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 1.5 3.5 4v4.8c0 4.1 2.7 7.8 6.5 9.7 3.8-1.9 6.5-5.6 6.5-9.7V4L10 1.5Zm0 3.1a2.4 2.4 0 0 1 2.4 2.4v1h.7v4.6H6.9V8h.7V7A2.4 2.4 0 0 1 10 4.6Zm0 1.3c-.6 0-1.1.5-1.1 1.1v1h2.2V7c0-.6-.5-1.1-1.1-1.1Z"/></svg>
+            Tailnet only
+          </div>
+        </div>
+      </section>
+
+      <div id="demo-banner" class="demo-banner" hidden>
+        Preview data is active. No account information is being shown.
+      </div>
+
+      <section class="section-heading" aria-labelledby="accounts-heading">
+        <div>
+          <p class="section-kicker">This machine</p>
+          <h2 id="accounts-heading">Account capacity</h2>
+        </div>
+        <div class="updated-copy">Updated <time id="updated-at">—</time></div>
+      </section>
+
+      <section id="accounts" class="account-grid" aria-live="polite" aria-busy="true">
+        <article class="account-card skeleton-card"></article>
+        <article class="account-card skeleton-card"></article>
+        <article class="account-card skeleton-card"></article>
+        <article class="account-card skeleton-card"></article>
+        <article class="account-card skeleton-card"></article>
+        <article class="account-card skeleton-card"></article>
+        <article class="account-card skeleton-card"></article>
+        <article class="account-card skeleton-card"></article>
+      </section>
+    </main>
+
+    <footer>
+      <p>Percentages are reported by Codex App Server. Exact remaining message counts are not available.</p>
+      <p class="footer-security"><span aria-hidden="true">●</span> No credentials leave their Linux account</p>
+    </footer>
+  </div>
+  <noscript>This dashboard requires JavaScript to display live account status.</noscript>
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>

@@ -53,6 +53,7 @@
         meta.name = "unibe-clan"; # Ensure to choose a unique name.
 
         modules.tailscale = import ./service-modules/tailscale.nix;
+        modules.codex-usage-dashboard = import ./service-modules/codex-usage-dashboard.nix;
 
         inventory.instances.tailscale = {
           module = {
@@ -64,6 +65,15 @@
           roles.peer.machines.itpmario = {};
           roles.peer.machines.itppeach = {};
           roles.peer.machines.itphlies = {};
+        };
+
+        inventory.instances.codex-usage-dashboard = {
+          module = {
+            name = "codex-usage-dashboard";
+            input = "self";
+          };
+
+          roles.server.machines.itphlies = {};
         };
 
         machines = {
@@ -107,6 +117,20 @@
         system,
         ...
       }: {
+        packages = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          codex-usage-dashboard =
+            pkgs.callPackage ./packages/codex-usage-dashboard/package.nix {};
+        };
+
+        checks = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          codex-usage-dashboard =
+            pkgs.callPackage ./packages/codex-usage-dashboard/package.nix {};
+          codex-usage-dashboard-module = import ./packages/codex-usage-dashboard/nix/module-test.nix {
+            nixpkgs = inputs.nixpkgs;
+            inherit system;
+          };
+        };
+
         devShells.default = pkgs.mkShell {
           packages = [
             clan-core.packages.${system}.clan-cli

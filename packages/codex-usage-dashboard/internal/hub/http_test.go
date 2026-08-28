@@ -80,8 +80,8 @@ func TestStaticDashboardPutsFilteredAccountOverviewFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	page := string(payload)
-	overview := strings.Index(page, "Account overview")
-	timeline := strings.Index(page, "Reset timeline")
+	overview := strings.Index(page, `id="accounts-heading"`)
+	timeline := strings.Index(page, `id="timeline-heading"`)
 	if overview < 0 || timeline < 0 || overview >= timeline {
 		t.Fatalf("dashboard section order is wrong: overview=%d timeline=%d", overview, timeline)
 	}

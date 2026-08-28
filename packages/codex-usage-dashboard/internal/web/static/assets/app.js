@@ -37,7 +37,7 @@ let knownAdjustmentIDs = null;
 let localunitarityOnly = localunitarityFilter.checked;
 let sortMode = "alphabetical";
 let priorityBasis = (priorityBasisInputs.find((input) => input.checked) || {}).value || "remaining";
-const adjustmentDetailDefault = "Focus or tap an amber marker to inspect the server-reported before and after values.";
+const adjustmentDetailDefault = "";
 
 function node(tag, className, text) {
   const element = document.createElement(tag);
@@ -368,14 +368,6 @@ function appendRemainingMeter(parent, remaining, used, label) {
   parent.append(meter);
 }
 
-function initials(username) {
-  const value = String(username || "?");
-  if (value.startsWith("codex")) {
-    return value.replace("codex", "c").slice(0, 2);
-  }
-  return value.slice(0, 2);
-}
-
 function renderAccountSummary(accounts) {
   const table = node("table", "account-table");
   const caption = node("caption", "visually-hidden", "Main weekly Codex usage by Linux account");
@@ -399,9 +391,6 @@ function renderAccountSummary(accounts) {
     const identityCell = node("th", "account-identity");
     identityCell.scope = "row";
     const identityInner = node("span", "account-identity-inner");
-    const orb = node("span", "user-orb", initials(account.username));
-    orb.setAttribute("aria-hidden", "true");
-    identityInner.append(orb);
     const identity = node("span", "identity-copy");
     identity.append(node("strong", "username", account.username || "unknown"));
     const email = account.account && account.account.email ? account.account.email : "No ChatGPT email";
@@ -703,6 +692,7 @@ function renderTimeline(accounts) {
   });
 
   if (accounts.length === 0) {
+    canvas.classList.add("is-empty");
     canvas.append(node("div", "timeline-empty", localunitarityOnly
       ? "No matching localunitarity Gmail accounts"
       : "No accounts available"));

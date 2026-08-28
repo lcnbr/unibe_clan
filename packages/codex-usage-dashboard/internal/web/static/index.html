@@ -11,14 +11,7 @@
 <body>
   <div class="page-shell">
     <header class="masthead">
-      <div class="brand-lockup" aria-label="Codex capacity">
-        <span class="brand-mark" aria-hidden="true">
-          <span></span><span></span><span></span><span></span><span></span><span></span>
-        </span>
-        <span class="brand-name">Codex</span>
-        <span class="brand-divider" aria-hidden="true"></span>
-        <span class="brand-section">Capacity</span>
-      </div>
+      <h1 class="brand-name">Codex usage</h1>
       <div class="connection-wrap">
         <span id="connection-dot" class="connection-dot" aria-hidden="true"></span>
         <span id="connection-label">Connecting</span>
@@ -26,31 +19,13 @@
     </header>
 
     <main>
-      <section class="hero" aria-labelledby="page-title">
-        <div>
-          <p class="eyebrow">Private machine overview</p>
-          <h1 id="page-title">Weekly resets.<br><span>One clean roster.</span></h1>
-        </div>
-        <div class="hero-meta">
-          <p>Anchored weekly reset windows and the canonical Codex allowance from each isolated local session.</p>
-          <div class="privacy-chip">
-            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 1.5 3.5 4v4.8c0 4.1 2.7 7.8 6.5 9.7 3.8-1.9 6.5-5.6 6.5-9.7V4L10 1.5Zm0 3.1a2.4 2.4 0 0 1 2.4 2.4v1h.7v4.6H6.9V8h.7V7A2.4 2.4 0 0 1 10 4.6Zm0 1.3c-.6 0-1.1.5-1.1 1.1v1h2.2V7c0-.6-.5-1.1-1.1-1.1Z"/></svg>
-            Tailnet only
-          </div>
-        </div>
-      </section>
-
       <div id="demo-banner" class="demo-banner" hidden>
         Preview data is active. No account information is being shown.
       </div>
 
       <section class="dashboard-section" aria-labelledby="accounts-heading">
         <header class="section-heading">
-          <div>
-            <p class="section-kicker">Canonical quota only</p>
-            <h2 id="accounts-heading">Account overview</h2>
-            <p class="section-copy">One compact row per Linux user. Spark and other model-specific buckets are excluded. Controls apply to both views.</p>
-          </div>
+          <h2 id="accounts-heading">Accounts</h2>
           <div class="account-tools" aria-label="Account view controls">
             <label class="filter-toggle">
               <input id="localunitarity-filter" type="checkbox" checked aria-controls="accounts timeline">
@@ -78,11 +53,7 @@
 
       <section class="dashboard-section" aria-labelledby="timeline-heading">
         <header class="section-heading">
-          <div>
-            <p class="section-kicker">Rolling weekly windows</p>
-            <h2 id="timeline-heading">Reset timeline</h2>
-            <p id="timeline-caption" class="section-copy">The next seven days are shown first. Scroll left for tracked history.</p>
-          </div>
+          <h2 id="timeline-heading">Reset history</h2>
           <div class="timeline-tools">
             <span class="timeline-legend"><span class="legend-diamond" aria-hidden="true"></span> Server adjustment</span>
             <div class="timeline-actions" aria-label="Timeline controls">
@@ -92,19 +63,19 @@
           </div>
         </header>
 
+        <p id="timeline-caption" class="visually-hidden">Weekly reset windows. Scroll left for tracked history.</p>
         <div id="timeline" class="timeline-scroll" role="region" aria-labelledby="timeline-heading" aria-describedby="timeline-caption" aria-busy="true" tabindex="0">
           <div class="timeline-skeleton" aria-hidden="true"></div>
         </div>
-        <p id="adjustment-detail" class="adjustment-detail">Focus or tap an amber marker to inspect the server-reported before and after values.</p>
-        <p id="tracking-copy" class="tracking-copy">Reset and server-adjustment history begins with this tracker.</p>
+        <p id="adjustment-detail" class="adjustment-detail"></p>
+        <p id="tracking-copy" class="tracking-copy"></p>
       </section>
 
       <p id="screen-reader-status" class="visually-hidden" aria-live="polite"></p>
     </main>
 
     <footer>
-      <p>Codex rounds usage to whole percentages. “0% reported” can include usage below 0.5%; exact message counts are unavailable.</p>
-      <p class="footer-security"><span aria-hidden="true">●</span> No credentials leave their Linux account</p>
+      <p>Usage is rounded to whole percentages; 0% can mean less than 0.5%.</p>
     </footer>
   </div>
   <noscript>This dashboard requires JavaScript to display live account status.</noscript>

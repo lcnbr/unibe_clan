@@ -358,6 +358,7 @@ function appendRemainingMeter(parent, remaining, used, label) {
   meter.setAttribute("aria-valuemax", "100");
   meter.setAttribute("aria-valuenow", String(presentation.remaining));
   meter.setAttribute("aria-valuetext", presentation.valueText);
+  meter.title = presentation.valueText;
   if (presentation.state) {
     meter.classList.add(presentation.state);
   }

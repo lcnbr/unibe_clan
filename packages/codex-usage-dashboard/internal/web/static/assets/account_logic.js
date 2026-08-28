@@ -92,7 +92,7 @@
       : Math.max(0, Math.min(100, 100 - (Number.isFinite(usedValue) ? usedValue : 0)));
     return {
       remaining,
-      state: remaining <= 0 ? "danger" : (remaining <= 20 ? "warn" : ""),
+      state: remaining <= 20 ? "danger" : (remaining <= 50 ? "warn" : ""),
       valueText: usedValue === 0
         ? `approximately ${remaining} percent remaining; reported usage may be below one half percent`
         : `approximately ${remaining} percent remaining`,

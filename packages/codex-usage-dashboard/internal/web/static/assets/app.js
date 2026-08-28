@@ -349,24 +349,20 @@ function usageLabel(used) {
   return used === 0 ? "0% reported" : `≈${used}% used`;
 }
 
-function appendMeter(parent, used, label) {
+function appendRemainingMeter(parent, remaining, used, label) {
+  const presentation = accountLogic.remainingQuotaMeter(remaining, used);
   const meter = node("div", "meter");
   meter.setAttribute("role", "progressbar");
   meter.setAttribute("aria-label", label);
   meter.setAttribute("aria-valuemin", "0");
   meter.setAttribute("aria-valuemax", "100");
-  meter.setAttribute("aria-valuenow", String(used));
-  meter.setAttribute(
-    "aria-valuetext",
-    used === 0 ? "0 percent reported; actual usage may be below one half percent" : `approximately ${used} percent used`,
-  );
-  if (used >= 100) {
-    meter.classList.add("danger");
-  } else if (used >= 80) {
-    meter.classList.add("warn");
+  meter.setAttribute("aria-valuenow", String(presentation.remaining));
+  meter.setAttribute("aria-valuetext", presentation.valueText);
+  if (presentation.state) {
+    meter.classList.add(presentation.state);
   }
   const fill = node("span");
-  fill.style.width = `${Math.max(0, Math.min(100, used))}%`;
+  fill.style.width = `${presentation.remaining}%`;
   meter.append(fill);
   parent.append(meter);
 }
@@ -424,8 +420,9 @@ function renderAccountSummary(accounts) {
     const usageCell = node("td", "usage-cell");
     if (usage) {
       const used = Math.max(0, Math.min(100, Number(usage.usedPercent) || 0));
+      const remaining = remainingPercent(account);
       usageCell.append(node("strong", "usage-value", usageLabel(used)));
-      appendMeter(usageCell, used, `Main weekly usage for ${account.username}`);
+      appendRemainingMeter(usageCell, remaining, used, `Remaining weekly quota for ${account.username}`);
     } else {
       usageCell.append(node("span", "unavailable-value", "—"));
     }

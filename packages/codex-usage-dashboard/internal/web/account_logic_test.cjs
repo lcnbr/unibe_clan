@@ -66,3 +66,16 @@ test("filter and sort operate on a copy and use deterministic natural usernames"
   assert.deepEqual(selected.map((entry) => entry.username), ["codex-1", "codex-2"]);
   assert.equal(source[0].username, "codex-10");
 });
+
+test("quota meter fills by remaining quota and warns as it runs out", () => {
+  assert.deepEqual(logic.remainingQuotaMeter(42, 58), {
+    remaining: 42,
+    state: "",
+    valueText: "approximately 42 percent remaining",
+  });
+  assert.equal(logic.remainingQuotaMeter(20, 80).state, "warn");
+  assert.equal(logic.remainingQuotaMeter(0, 100).state, "danger");
+  assert.equal(logic.remainingQuotaMeter(125, -25).remaining, 100);
+  assert.equal(logic.remainingQuotaMeter(null, 58).remaining, 42);
+  assert.match(logic.remainingQuotaMeter(100, 0).valueText, /below one half percent/);
+});

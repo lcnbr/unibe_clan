@@ -81,11 +81,30 @@
       .map((entry) => entry.account);
   }
 
+  function remainingQuotaMeter(remainingPercent, usedPercent) {
+    const remainingValue = Number(remainingPercent);
+    const usedValue = Number(usedPercent);
+    const hasReportedRemaining = remainingPercent !== null
+      && remainingPercent !== undefined
+      && Number.isFinite(remainingValue);
+    const remaining = hasReportedRemaining
+      ? Math.max(0, Math.min(100, remainingValue))
+      : Math.max(0, Math.min(100, 100 - (Number.isFinite(usedValue) ? usedValue : 0)));
+    return {
+      remaining,
+      state: remaining <= 0 ? "danger" : (remaining <= 20 ? "warn" : ""),
+      valueText: usedValue === 0
+        ? `approximately ${remaining} percent remaining; reported usage may be below one half percent`
+        : `approximately ${remaining} percent remaining`,
+    };
+  }
+
   return {
     alphabeticalCompare,
     matchesLocalunitarityAccount,
     priorityCompare,
     priorityTier,
+    remainingQuotaMeter,
     selectAccounts,
   };
 });

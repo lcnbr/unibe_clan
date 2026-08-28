@@ -110,7 +110,7 @@ let
       message = "the dashboard hardening and runtime-directory permissions changed";
     }
     {
-      assertion = lib.hasInfix "serve --listen 127.0.0.1:8787 --allowed-host itphlies.tailb3264.ts.net --socket /run/codex-usage-dashboard/ingest.sock --stale-after 90s --history-file /var/lib/codex-usage-dashboard/history.json --history-retention 1344h --user codex --user codex-1 --user codex-2 --user codex-3 --user lcnbr --user nfink --user vhirschi --user zeno" dashboard.serviceConfig.ExecStart;
+      assertion = lib.hasInfix "serve --listen 127.0.0.1:8787 --allowed-host itphlies.tailb3264.ts.net --socket /run/codex-usage-dashboard/ingest.sock --stale-after 90s --history-file /var/lib/codex-usage-dashboard/history.json --history-retention 8784h --user codex --user codex-1 --user codex-2 --user codex-3 --user lcnbr --user nfink --user vhirschi --user zeno" dashboard.serviceConfig.ExecStart;
       message = "the dashboard command-line contract changed";
     }
     {

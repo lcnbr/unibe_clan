@@ -105,7 +105,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	socketPath := flags.String("socket", "/run/codex-usage-dashboard/ingest.sock", "collector ingest Unix socket")
 	staleAfter := flags.Duration("stale-after", 90*time.Second, "age after which last-good data is stale")
 	historyFile := flags.String("history-file", "", "absolute file for retained reset history (empty keeps history in memory)")
-	historyRetention := flags.Duration("history-retention", 56*24*time.Hour, "completed reset history retention")
+	historyRetention := flags.Duration("history-retention", 366*24*time.Hour, "completed reset history retention")
 	maxPayload := flags.Int64("max-payload", 64<<10, "maximum snapshot size in bytes")
 	demo := flags.Bool("demo", false, "seed preview-only account data")
 	additionalAllowedHosts := hostList{}

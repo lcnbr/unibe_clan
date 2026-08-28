@@ -57,7 +57,7 @@ let
       "--history-file"
       historyPath
       "--history-retention"
-      "1344h"
+      "8784h"
     ]
     ++ concatMap (user: [
       "--user"

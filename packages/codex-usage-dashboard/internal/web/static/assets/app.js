@@ -2,7 +2,7 @@
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAIN_WEEK_MINUTES = 10080;
-const MAX_HISTORY_DAYS = 56;
+const DEFAULT_HISTORY_DAYS = 366;
 const HISTORY_SCHEMA_VERSION = 2;
 const RESET_TIMESTAMP_CHANGED = "reset_timestamp_changed";
 const USED_PERCENT_DECREASED = "used_percent_decreased";
@@ -515,7 +515,11 @@ function resetWindowsFor(account) {
 
 function timelineGeometry(accounts) {
   const now = Date.now();
-  const oldestAllowed = now - MAX_HISTORY_DAYS * DAY_MS;
+  const retentionDays = accountLogic.historyRetentionDays(
+    historyStatus && historyStatus.retentionDays,
+    DEFAULT_HISTORY_DAYS,
+  );
+  const oldestAllowed = now - retentionDays * DAY_MS;
   let earliest = now - DAY_MS;
   accounts.forEach((account) => {
     resetWindowsFor(account).forEach((windowValue) => {
@@ -735,7 +739,7 @@ function renderTimeline(accounts) {
     const since = validDate(historyStatus.trackingSince);
     const adjustmentsSince = validDate(historyStatus.adjustmentsTrackingSince);
     trackingCopy.textContent = since
-      ? `Reset history since ${since.toLocaleString()}; server adjustments since ${adjustmentsSince ? adjustmentsSince.toLocaleString() : since.toLocaleString()}. Retained for ${historyStatus.retentionDays || MAX_HISTORY_DAYS} days.`
+      ? `Reset history since ${since.toLocaleString()}; server adjustments since ${adjustmentsSince ? adjustmentsSince.toLocaleString() : since.toLocaleString()}. Retained for ${accountLogic.historyRetentionDays(historyStatus.retentionDays, DEFAULT_HISTORY_DAYS)} days.`
       : "Scroll left to review completed weekly windows and server adjustments.";
   } else {
     trackingCopy.classList.remove("warning-copy");

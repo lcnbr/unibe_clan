@@ -78,8 +78,8 @@ The dashboard keeps current account snapshots only in memory. An unavailable
 refresh retains last-good data, while data older than 90 seconds is marked
 stale. Restarting the dashboard discards those live snapshots.
 
-Anchored weekly reset windows and completed reset events are retained for eight
-weeks in `/var/lib/codex-usage-dashboard/history.json`. The mode-0600 file is
+Anchored weekly reset windows and completed reset events are retained for one
+year in `/var/lib/codex-usage-dashboard/history.json`. The mode-0600 file is
 written atomically and contains no email, plan, credential, account ID, credit,
 or model-specific data. A zero-use timestamp must stay fixed across polls
 before it is anchored, preventing an unused “now + 7 days” window from

@@ -81,3 +81,12 @@ test("quota meter fills by remaining quota and warns as it runs out", () => {
   assert.equal(logic.remainingQuotaMeter(null, 58).remaining, 42);
   assert.match(logic.remainingQuotaMeter(100, 0).valueText, /below one half percent/);
 });
+
+test("history retention follows the validated server value for the scroll horizon", () => {
+  assert.equal(logic.historyRetentionDays(366), 366);
+  assert.equal(logic.historyRetentionDays(90), 90);
+  assert.equal(logic.historyRetentionDays("365"), 365);
+  assert.equal(logic.historyRetentionDays(null), 366);
+  assert.equal(logic.historyRetentionDays(367), 366);
+  assert.equal(logic.historyRetentionDays(6, 30), 30);
+});

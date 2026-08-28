@@ -99,8 +99,20 @@
     };
   }
 
+  function historyRetentionDays(value, fallback = 366) {
+    const reported = Number(value);
+    if (Number.isInteger(reported) && reported >= 7 && reported <= 366) {
+      return reported;
+    }
+    const defaultValue = Number(fallback);
+    return Number.isInteger(defaultValue) && defaultValue >= 7 && defaultValue <= 366
+      ? defaultValue
+      : 366;
+  }
+
   return {
     alphabeticalCompare,
+    historyRetentionDays,
     matchesLocalunitarityAccount,
     priorityCompare,
     priorityTier,

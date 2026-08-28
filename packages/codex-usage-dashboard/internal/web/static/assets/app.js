@@ -643,6 +643,9 @@ function renderTimeline(accounts) {
     axis.append(tick);
     day = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1);
   }
+  const corner = node("div", "timeline-corner", "Account");
+  corner.setAttribute("aria-hidden", "true");
+  axis.append(corner);
   canvas.append(axis);
 
   accounts.forEach((account) => {

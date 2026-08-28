@@ -341,18 +341,17 @@ h1 {
   background: #0f1214;
 }
 
-.timeline-axis::before {
-  content: "Account";
+.timeline-corner {
   position: sticky;
   left: 0;
-  z-index: 6;
+  z-index: 8;
   width: var(--label-width);
   height: 43px;
   padding: 14px 12px;
-  display: block;
   border-right: 1px solid var(--line);
   color: var(--muted-2);
   background: #0d1113;
+  box-shadow: 6px 0 10px rgba(8, 11, 13, .18);
   font-family: var(--mono);
   font-size: 10px;
   letter-spacing: .08em;
@@ -945,7 +944,7 @@ noscript {
     padding-left: 10px;
   }
 
-  .timeline-axis::before {
+  .timeline-corner {
     padding-left: 10px;
   }
 

@@ -25,13 +25,82 @@ let
 
   serviceUser = "codex-usage-dashboard";
   ingestGroup = "codex-usage-dashboard";
+  activityGroup = "users";
   runtimeDirectory = "codex-usage-dashboard";
   runtimePath = "/run/${runtimeDirectory}";
   stateDirectory = "codex-usage-dashboard";
-  historyPath = "/var/lib/${stateDirectory}/history.json";
+  historyPath = "/var/lib/${stateDirectory}/account-history.json";
+  # Keep this outside the codex-usage-* unit namespace: operational checks
+  # count that namespace as the dashboard plus collector fleet.
+  homePreparationService = "codex-dashboard-home-preparation";
 
   dashboardBin = "${cfg.package}/bin/codex-usage-dashboard";
   codexBin = "${cfg.codexPackage}/bin/codex";
+  anchorUsers = builtins.attrNames cfg.expectedAnchors;
+
+  hookCommand = escapeShellArgs [
+    dashboardBin
+    "hook-report"
+    "--socket"
+    cfg.activitySocket
+  ];
+
+  managedRequirements = ''
+    [features]
+    hooks = true
+
+    [hooks]
+    managed_dir = ${builtins.toJSON "${cfg.package}/bin"}
+
+    [[hooks.SessionStart]]
+
+    [[hooks.SessionStart.hooks]]
+    type = "command"
+    command = ${builtins.toJSON hookCommand}
+    timeout = 2
+
+    [[hooks.UserPromptSubmit]]
+
+    [[hooks.UserPromptSubmit.hooks]]
+    type = "command"
+    command = ${builtins.toJSON hookCommand}
+    timeout = 2
+
+    [[hooks.PreToolUse]]
+
+    [[hooks.PreToolUse.hooks]]
+    type = "command"
+    command = ${builtins.toJSON hookCommand}
+    timeout = 2
+
+    [[hooks.PostToolUse]]
+
+    [[hooks.PostToolUse.hooks]]
+    type = "command"
+    command = ${builtins.toJSON hookCommand}
+    timeout = 2
+
+    [[hooks.Stop]]
+
+    [[hooks.Stop.hooks]]
+    type = "command"
+    command = ${builtins.toJSON hookCommand}
+    timeout = 2
+
+    [[hooks.SubagentStop]]
+
+    [[hooks.SubagentStop.hooks]]
+    type = "command"
+    command = ${builtins.toJSON hookCommand}
+    timeout = 2
+
+    [[hooks.SessionEnd]]
+
+    [[hooks.SessionEnd.hooks]]
+    type = "command"
+    command = ${builtins.toJSON hookCommand}
+    timeout = 2
+  '';
 
   userExists = user: builtins.hasAttr user config.users.users;
   userHome = user: config.users.users.${user}.home;
@@ -52,6 +121,12 @@ let
     ++ [
       "--socket"
       cfg.socket
+      "--activity-socket"
+      cfg.activitySocket
+      "--activity-socket-group"
+      activityGroup
+      "--activity-lease"
+      cfg.activityLease
       "--stale-after"
       "90s"
       "--history-file"
@@ -59,6 +134,10 @@ let
       "--history-retention"
       "8784h"
     ]
+    ++ concatMap (user: [
+      "--anchor"
+      "${user}=${cfg.expectedAnchors.${user}}"
+    ]) anchorUsers
     ++ concatMap (user: [
       "--user"
       user
@@ -84,6 +163,14 @@ let
       "5m"
       "--stat-interval"
       "5s"
+    ];
+
+  prepareHomeCommand =
+    user:
+    escapeShellArgs [
+      "${config.systemd.package}/bin/systemd-tmpfiles"
+      "--create"
+      "--prefix=${codexHome user}"
     ];
 
   commonHardening = {
@@ -191,6 +278,24 @@ in
       description = "Unix socket used by collectors to submit snapshots.";
     };
 
+    activitySocket = mkOption {
+      type = types.str;
+      default = "${runtimePath}/activity.sock";
+      description = ''
+        Peer-authenticated Unix socket used by managed Codex hooks to submit
+        sanitized chat lifecycle events.
+      '';
+    };
+
+    activityLease = mkOption {
+      type = types.str;
+      default = "30m";
+      description = ''
+        Maximum age of a hook session without an event before its in-memory
+        activity record is expired. SessionEnd removes it immediately.
+      '';
+    };
+
     users = mkOption {
       type = types.listOf types.str;
       default = [
@@ -204,6 +309,26 @@ in
         "zeno"
       ];
       description = "Existing local users for which collectors are started.";
+    };
+
+    expectedAnchors = mkOption {
+      type = types.attrsOf types.str;
+      default = { };
+      description = ''
+        Map of collector usernames to the exact account email expected for
+        anchor health checks. Values are used only in memory and public status
+        responses; they are never written to history.
+      '';
+    };
+
+    homePreparationRequires = mkOption {
+      type = types.listOf types.str;
+      default = [ ];
+      description = ''
+        Units that must finish before collector-owned Codex directories are
+        prepared. Hosts that mount per-user homes dynamically should list the
+        responsible mount or dataset-management service here.
+      '';
     };
 
     codexPackage = mkOption {
@@ -271,6 +396,35 @@ in
           message = "services.codexUsageDashboard.socket must be inside ${runtimePath}";
         }
         {
+          assertion = builtins.dirOf cfg.activitySocket == runtimePath;
+          message = "services.codexUsageDashboard.activitySocket must be inside ${runtimePath}";
+        }
+        {
+          assertion = cfg.activitySocket != cfg.socket;
+          message = "services.codexUsageDashboard.activitySocket and socket must differ";
+        }
+        {
+          assertion = cfg.activityLease != "";
+          message = "services.codexUsageDashboard.activityLease must not be empty";
+        }
+        {
+          assertion = builtins.all (user: builtins.elem user cfg.users) anchorUsers;
+          message = ''
+            Every services.codexUsageDashboard.expectedAnchors key must also
+            be listed in services.codexUsageDashboard.users
+          '';
+        }
+        {
+          assertion = builtins.all (email: email != "") (builtins.attrValues cfg.expectedAnchors);
+          message = "services.codexUsageDashboard.expectedAnchors values must not be empty";
+        }
+        {
+          assertion =
+            length (unique (builtins.attrValues cfg.expectedAnchors))
+            == length (builtins.attrValues cfg.expectedAnchors);
+          message = "services.codexUsageDashboard.expectedAnchors values must be unique";
+        }
+        {
           assertion = getVersion cfg.codexPackage == cfg.expectedCodexVersion;
           message = ''
             services.codexUsageDashboard.codexPackage must be Codex CLI
@@ -289,18 +443,52 @@ in
         createHome = false;
       };
 
-      # A collector must be able to start before its user has ever logged in.
-      # Create only the empty state directory; credential contents remain
-      # exclusively owned and read by Codex App Server under that user's UID.
+      # Keep the compatibility-tested Codex executable available for both the
+      # collectors and interactive `sudo -iu <user> codex login` sessions.
+      environment.systemPackages = [ cfg.codexPackage ];
+
+      # Codex loads Unix-wide admin requirements from this fixed location.
+      # The hooks forward their JSON event on stdin to a peer-UID-authenticated
+      # socket; prompts, tool inputs, paths, and environment data are discarded
+      # by the reporter and never interpolated into this command or its logs.
+      environment.etc."codex/requirements.toml" = {
+        text = managedRequirements;
+        mode = "0444";
+      };
+
+      # The normal boot pass handles ordinary mounted homes. The ordered
+      # preparation service below safely repeats these exact rules after any
+      # host-specific dynamic per-user mounts have completed.
       systemd.tmpfiles.rules = map (
         user: "d ${codexHome user} 0700 ${user} ${userGroup user} -"
       ) cfg.users;
 
       systemd.services = {
+        ${homePreparationService} = {
+          description = "Prepare private Codex state directories after user homes are mounted";
+          before = [ "codex-usage-dashboard.service" ];
+          after = [ "local-fs.target" ] ++ cfg.homePreparationRequires;
+          requires = cfg.homePreparationRequires;
+
+          # Safely repeat the declarative tmpfiles rule after host-specific
+          # per-user datasets are mounted. systemd-tmpfiles rejects unsafe
+          # symlink traversal; this service never reads credential data.
+          script = lib.concatMapStringsSep "\n" prepareHomeCommand cfg.users;
+          serviceConfig = {
+            Type = "oneshot";
+            RemainAfterExit = true;
+            UMask = "0077";
+          };
+        };
+
         "codex-usage-dashboard" = {
           description = "Codex account usage dashboard";
           wantedBy = [ "multi-user.target" ];
-          after = [ "network.target" ];
+          after = [
+            "network.target"
+            "${homePreparationService}.service"
+          ];
+          requires = [ "${homePreparationService}.service" ];
           startLimitIntervalSec = 0;
 
           environment = {
@@ -312,13 +500,19 @@ in
             ExecStart = serverCommand;
             User = serviceUser;
             Group = ingestGroup;
+            SupplementaryGroups = [ activityGroup ];
 
             Restart = "always";
             RestartSec = "5s";
             UMask = "0077";
 
             RuntimeDirectory = runtimeDirectory;
-            RuntimeDirectoryMode = "0750";
+            # Existing Codex processes may predate this module activation and
+            # therefore lack the newly-created ingest group. Execute-only
+            # traversal lets them reach activity.sock through their stable
+            # `users` group without permitting directory listing; ingest.sock
+            # remains protected by its dedicated group and SO_PEERCRED checks.
+            RuntimeDirectoryMode = "0711";
             StateDirectory = stateDirectory;
             StateDirectoryMode = "0700";
             ProtectHome = true;

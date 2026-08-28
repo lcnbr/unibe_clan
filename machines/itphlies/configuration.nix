@@ -5,6 +5,7 @@
   ...
 }: let
   userData = import config.unibe.userListFile;
+  dummyUserNames = map (index: "codex-dummy-${toString index}") (lib.range 0 3);
 in {
   imports = [
     # contains your disk format and partitioning configuration.
@@ -13,7 +14,7 @@ in {
     ../../modules/zfs-user-management.nix
   ];
 
-  unibe.userListFile = ../../user-lists/itppeach-itphlies.nix;
+  unibe.userListFile = ../../user-lists/itphlies.nix;
 
   users.users =
     lib.genAttrs
@@ -28,6 +29,9 @@ in {
       home = "/home/${userName}";
       description = userSpec.description or "";
       openssh.authorizedKeys.keys = userSpec.sshKeys or [];
+      # Anchor accounts are reachable only through an administrator's
+      # `sudo -iu`; they have neither a usable password nor SSH keys.
+      hashedPassword = if builtins.elem userName dummyUserNames then "!" else null;
     });
 
   users.groups = userData.groups;
@@ -35,6 +39,7 @@ in {
   services.openssh.enable = true;
   services.openssh.settings.PasswordAuthentication = false;
   services.openssh.settings.PermitRootLogin = "no";
+  services.openssh.settings.DenyUsers = lib.mkAfter dummyUserNames;
   security.sudo.enable = true;
   security.sudo.wheelNeedsPassword = false;
   clan.core.networking.targetHost = "lcnbr@130.92.184.209";

@@ -71,6 +71,33 @@ func TestClientHandshakeAccountLimitsAndNotification(t *testing.T) {
 			serverDone <- err
 			return
 		}
+		usage, err := read("account/usage/read")
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		if _, err := serverConn.Write([]byte(`{"id":` + string(usage["id"]) + `,"result":{"summary":{"lifetimeTokens":123456,"peakDailyTokens":999},"dailyUsageBuckets":[{"tokens":7}]}}` + "\n")); err != nil {
+			serverDone <- err
+			return
+		}
+		threads, err := read("thread/list")
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		var threadParams struct {
+			SourceKinds []string `json:"sourceKinds"`
+		}
+		if err := json.Unmarshal(threads["params"], &threadParams); err != nil ||
+			strings.Join(threadParams.SourceKinds, ",") != "cli,vscode,exec,appServer,unknown" {
+			serverDone <- fmt.Errorf("thread sourceKinds = %#v (error %v)", threadParams.SourceKinds, err)
+			return
+		}
+		threadResponse := `{"id":` + string(threads["id"]) + `,"result":{"data":[{"id":"opaque-thread-1","sessionId":"session-1","source":"exec","name":"Safe name","createdAt":10,"updatedAt":20,"preview":"private prompt","path":"/private/path","cwd":"/repo","gitInfo":{"branch":"secret"},"turns":[{"input":"secret"}]}],"nextCursor":"opaque"}}`
+		if _, err := serverConn.Write([]byte(threadResponse + "\n")); err != nil {
+			serverDone <- err
+			return
+		}
 		if _, err := serverConn.Write([]byte("{\"method\":\"account/rateLimits/updated\",\"params\":{\"rateLimits\":{}}}\n")); err != nil {
 			serverDone <- err
 			return
@@ -99,6 +126,21 @@ func TestClientHandshakeAccountLimitsAndNotification(t *testing.T) {
 	}
 	if limits.ResetCredits == nil || limits.ResetCredits.AvailableCount == nil || *limits.ResetCredits.AvailableCount != 2 {
 		t.Fatalf("unexpected reset credit summary: %#v", limits.ResetCredits)
+	}
+	usage, err := client.AccountUsage(ctx)
+	if err != nil || usage.LifetimeTokens == nil || *usage.LifetimeTokens != 123456 {
+		t.Fatalf("AccountUsage = %#v, error %v", usage, err)
+	}
+	threads, err := client.Threads(ctx, 64)
+	if err != nil || len(threads.Threads) != 1 || threads.Threads[0].ID != "opaque-thread-1" ||
+		threads.Threads[0].SessionID != "session-1" || threads.Threads[0].Source != SessionSourceExec ||
+		threads.Threads[0].Name == nil || *threads.Threads[0].Name != "Safe name" {
+		t.Fatalf("Threads = %#v, error %v", threads, err)
+	}
+	threadPayload, err := json.Marshal(threads.Threads[0])
+	if err != nil || strings.Contains(string(threadPayload), "private") ||
+		strings.Contains(string(threadPayload), "secret") || strings.Contains(string(threadPayload), "turns") {
+		t.Fatalf("thread allowlist retained private data: %s (error %v)", threadPayload, err)
 	}
 	resetPayload, err := json.Marshal(limits.ResetCredits)
 	if err != nil || strings.Contains(string(resetPayload), "opaque-secret") || strings.Contains(string(resetPayload), `"credits"`) {
@@ -131,6 +173,171 @@ func TestResetCreditCountDistinguishesMissingFromZero(t *testing.T) {
 	}
 	if zero.AvailableCount == nil || *zero.AvailableCount != 0 {
 		t.Fatalf("authoritative zero decoded as %#v", zero.AvailableCount)
+	}
+}
+
+func TestLoadedThreadsScansPastSubagentsAndRequiresSessionMetadata(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer serverConn.Close()
+	client := newClient(clientConn, clientConn, clientConn.Close, 64<<10)
+	defer client.Close()
+
+	serverDone := make(chan error, 1)
+	go func() {
+		scanner := bufio.NewScanner(serverConn)
+		read := func(wantMethod string) (map[string]json.RawMessage, error) {
+			if !scanner.Scan() {
+				return nil, fmt.Errorf("missing %s", wantMethod)
+			}
+			var message map[string]json.RawMessage
+			if err := json.Unmarshal(scanner.Bytes(), &message); err != nil {
+				return nil, err
+			}
+			var method string
+			if err := json.Unmarshal(message["method"], &method); err != nil || method != wantMethod {
+				return nil, fmt.Errorf("method = %q, want %q", method, wantMethod)
+			}
+			return message, nil
+		}
+		respond := func(request map[string]json.RawMessage, result string) error {
+			_, err := serverConn.Write([]byte(`{"id":` + string(request["id"]) + `,"result":` + result + "}\n"))
+			return err
+		}
+
+		first, err := read("thread/loaded/list")
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		var firstParams struct {
+			Cursor *string `json:"cursor"`
+			Limit  int     `json:"limit"`
+		}
+		if err := json.Unmarshal(first["params"], &firstParams); err != nil ||
+			firstParams.Cursor != nil || firstParams.Limit != 64 {
+			serverDone <- fmt.Errorf("first loaded params = %#v (error %v)", firstParams, err)
+			return
+		}
+		firstIDs := make([]string, 64)
+		for index := range firstIDs {
+			firstIDs[index] = fmt.Sprintf("subagent-%02d", index)
+		}
+		encodedFirstIDs, _ := json.Marshal(firstIDs)
+		if err := respond(first, `{"data":`+string(encodedFirstIDs)+`,"nextCursor":"after-subagents"}`); err != nil {
+			serverDone <- err
+			return
+		}
+
+		second, err := read("thread/loaded/list")
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		var secondParams struct {
+			Cursor *string `json:"cursor"`
+			Limit  int     `json:"limit"`
+		}
+		if err := json.Unmarshal(second["params"], &secondParams); err != nil ||
+			secondParams.Cursor == nil || *secondParams.Cursor != "after-subagents" || secondParams.Limit != 64 {
+			serverDone <- fmt.Errorf("second loaded params = %#v (error %v)", secondParams, err)
+			return
+		}
+		lastIDs := []string{"missing-session", "root-active", "root-idle"}
+		encodedLastIDs, _ := json.Marshal(lastIDs)
+		if err := respond(second, `{"data":`+string(encodedLastIDs)+`,"nextCursor":null}`); err != nil {
+			serverDone <- err
+			return
+		}
+
+		for _, id := range append(firstIDs, lastIDs...) {
+			request, err := read("thread/read")
+			if err != nil {
+				serverDone <- err
+				return
+			}
+			var params struct {
+				ThreadID     string `json:"threadId"`
+				IncludeTurns bool   `json:"includeTurns"`
+			}
+			if err := json.Unmarshal(request["params"], &params); err != nil ||
+				params.ThreadID != id || params.IncludeTurns {
+				serverDone <- fmt.Errorf("thread/read params = %#v for %q (error %v)", params, id, err)
+				return
+			}
+			thread := map[string]any{
+				"id": id, "sessionId": "shared-session", "source": "cli",
+				"name": "Safe", "parentThreadId": nil,
+				"status": map[string]any{"type": "idle"}, "createdAt": 10, "updatedAt": 20,
+			}
+			if strings.HasPrefix(id, "subagent-") {
+				thread["parentThreadId"] = "parent"
+				thread["source"] = map[string]any{"subAgent": map[string]any{"thread_spawn": map[string]any{}}}
+			}
+			if id == "missing-session" {
+				delete(thread, "sessionId")
+			}
+			if id == "root-active" {
+				thread["status"] = map[string]any{"type": "active"}
+				thread["name"] = "Running"
+				thread["createdAt"] = 5
+			}
+			if id == "root-idle" {
+				thread["source"] = "appServer"
+				thread["name"] = "Newest"
+				thread["updatedAt"] = 30
+			}
+			encodedThread, _ := json.Marshal(thread)
+			if err := respond(request, `{"thread":`+string(encodedThread)+`}`); err != nil {
+				serverDone <- err
+				return
+			}
+		}
+		serverDone <- nil
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	threads, err := client.LoadedThreads(ctx, 64)
+	if err != nil {
+		t.Fatalf("LoadedThreads: %v", err)
+	}
+	if len(threads.Threads) != 2 || threads.Threads[0].ID != "root-active" ||
+		threads.Threads[1].ID != "root-idle" ||
+		threads.Threads[0].SessionID != "shared-session" ||
+		threads.Threads[1].SessionID != "shared-session" {
+		t.Fatalf("loaded roots = %#v", threads.Threads)
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSessionSourceAllowlistExcludesObjectAndFutureSources(t *testing.T) {
+	tests := []struct {
+		payload string
+		want    SessionSource
+	}{
+		{`"cli"`, SessionSourceCLI},
+		{`"vscode"`, SessionSourceVSCode},
+		{`"exec"`, SessionSourceExec},
+		{`"appServer"`, SessionSourceAppServer},
+		{`"unknown"`, SessionSourceUnknown},
+		{`"future"`, ""},
+		{`{"custom":"private-client-name"}`, ""},
+		{`{"subAgent":{"thread_spawn":{"threadId":"private"}}}`, ""},
+	}
+	for _, test := range tests {
+		var source SessionSource
+		if err := json.Unmarshal([]byte(test.payload), &source); err != nil {
+			t.Fatalf("Unmarshal(%s): %v", test.payload, err)
+		}
+		if source != test.want || source.Allowed() != (test.want != "") {
+			t.Fatalf("source %s = %q allowed=%v, want %q", test.payload, source, source.Allowed(), test.want)
+		}
+		encoded, err := json.Marshal(source)
+		if err != nil || strings.Contains(string(encoded), "private") {
+			t.Fatalf("source re-encoding leaked input: %s (error %v)", encoded, err)
+		}
 	}
 }
 
@@ -198,6 +405,22 @@ func TestClientRejectsMissingRequiredResultFields(t *testing.T) {
 			result: `{"rateLimits":null}`,
 			call: func(ctx context.Context, client *Client) error {
 				_, err := client.RateLimits(ctx)
+				return err
+			},
+		},
+		{
+			name:   "usage summary cannot be null",
+			result: `{"summary":null}`,
+			call: func(ctx context.Context, client *Client) error {
+				_, err := client.AccountUsage(ctx)
+				return err
+			},
+		},
+		{
+			name:   "thread data cannot be null",
+			result: `{"data":null}`,
+			call: func(ctx context.Context, client *Client) error {
+				_, err := client.Threads(ctx, 64)
 				return err
 			},
 		},

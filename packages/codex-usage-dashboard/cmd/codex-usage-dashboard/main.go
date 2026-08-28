@@ -13,11 +13,13 @@ import (
 	"os/signal"
 	osuser "os/user"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"codex-usage-dashboard/internal/activity"
 	"codex-usage-dashboard/internal/collector"
 	usagehistory "codex-usage-dashboard/internal/history"
 	"codex-usage-dashboard/internal/hub"
@@ -53,6 +55,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return runServe(ctx, args[1:], stdout, stderr)
 	case "collector":
 		return runCollector(ctx, args[1:], stderr)
+	case "hook-report":
+		return runHookReport(ctx, args[1:], os.Stdin, stdout, stderr)
 	case "version", "--version", "-version":
 		_, err := fmt.Fprintln(stdout, version)
 		return err
@@ -69,10 +73,27 @@ func printUsage(writer io.Writer) {
 	_, _ = fmt.Fprintln(writer, `Usage:
   codex-usage-dashboard serve [options]
   codex-usage-dashboard collector [options]
+  codex-usage-dashboard hook-report --socket PATH
   codex-usage-dashboard version
 
 The serve mode accepts snapshots only over a peer-authenticated Unix socket
 and rejects non-loopback HTTP listeners.`)
+}
+
+func runHookReport(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("hook-report", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	socketPath := flags.String("socket", "", "dashboard activity Unix socket")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("hook-report accepts no positional arguments")
+	}
+	if *socketPath == "" || !filepath.IsAbs(*socketPath) {
+		return errors.New("hook-report socket must be an absolute path")
+	}
+	return activity.Report(ctx, *socketPath, stdin, stdout)
 }
 
 type stringList []string
@@ -98,11 +119,48 @@ func (values *hostList) Set(value string) error {
 	return nil
 }
 
+type anchorList map[string]string
+
+func (values *anchorList) String() string {
+	if values == nil || len(*values) == 0 {
+		return ""
+	}
+	entries := make([]string, 0, len(*values))
+	for username, email := range *values {
+		entries = append(entries, username+"="+email)
+	}
+	sort.Strings(entries)
+	return strings.Join(entries, ",")
+}
+
+func (values *anchorList) Set(value string) error {
+	parts := strings.SplitN(value, "=", 2)
+	if len(parts) != 2 {
+		return errors.New("anchor must use username=email")
+	}
+	username := strings.TrimSpace(parts[0])
+	email := strings.TrimSpace(parts[1])
+	if username == "" || email == "" || !strings.Contains(email, "@") {
+		return errors.New("anchor must contain a username and account email")
+	}
+	if *values == nil {
+		*values = make(anchorList)
+	}
+	if _, exists := (*values)[username]; exists {
+		return fmt.Errorf("anchor user %q is repeated", username)
+	}
+	(*values)[username] = email
+	return nil
+}
+
 func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	listenAddress := flags.String("listen", "127.0.0.1:8787", "literal loopback HTTP address")
 	socketPath := flags.String("socket", "/run/codex-usage-dashboard/ingest.sock", "collector ingest Unix socket")
+	activitySocketPath := flags.String("activity-socket", "/run/codex-usage-dashboard/activity.sock", "managed hook activity Unix socket")
+	activitySocketGroup := flags.String("activity-socket-group", "", "group owning the managed hook activity socket")
+	activityLease := flags.Duration("activity-lease", 30*time.Minute, "active-turn expiry without a hook event")
 	staleAfter := flags.Duration("stale-after", 90*time.Second, "age after which last-good data is stale")
 	historyFile := flags.String("history-file", "", "absolute file for retained reset history (empty keeps history in memory)")
 	historyRetention := flags.Duration("history-retention", 366*24*time.Hour, "completed reset history retention")
@@ -112,6 +170,8 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	flags.Var(&additionalAllowedHosts, "allowed-host", "exact additional HTTP Host name or IP (repeatable; omit ports)")
 	users := stringList{}
 	flags.Var(&users, "user", "collector Linux username (repeatable)")
+	anchors := anchorList{}
+	flags.Var(&anchors, "anchor", "expected anchor mapping as username=email (repeatable)")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -137,14 +197,27 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	if *socketPath == "" || !filepath.IsAbs(*socketPath) {
 		return errors.New("ingest socket must be an absolute path")
 	}
+	if *activitySocketPath == "" || !filepath.IsAbs(*activitySocketPath) {
+		return errors.New("activity socket must be an absolute path")
+	}
+	if filepath.Clean(*activitySocketPath) == filepath.Clean(*socketPath) {
+		return errors.New("activity and ingest sockets must use different paths")
+	}
+	if *activityLease <= 0 || *activityLease > 24*time.Hour {
+		return errors.New("activity-lease must be greater than zero and no more than 24 hours")
+	}
 	if *historyFile != "" && !filepath.IsAbs(*historyFile) {
 		return errors.New("history file must be an absolute path")
 	}
 	if *maxPayload < 1024 || *maxPayload > 1<<20 {
 		return errors.New("max-payload must be between 1024 and 1048576 bytes")
 	}
+	activitySocketGroupID, err := resolveGroupID(*activitySocketGroup)
+	if err != nil {
+		return err
+	}
 
-	identities, err := resolveIdentities(users)
+	identities, err := resolveIdentities(users, anchors)
 	if err != nil {
 		return err
 	}
@@ -152,11 +225,32 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	if err != nil {
 		return err
 	}
-	historyUsernames := make([]string, 0, len(identities))
+	activityIdentities := make([]activity.Identity, 0, len(identities))
 	for _, identity := range identities {
-		historyUsernames = append(historyUsernames, identity.Username)
+		activityIdentities = append(activityIdentities, activity.Identity{
+			Username: identity.Username,
+			UID:      identity.UID,
+		})
 	}
-	retainedHistory, err := usagehistory.Open(*historyFile, historyUsernames, *historyRetention)
+	activityTracker, err := activity.New(activityIdentities, *activityLease)
+	if err != nil {
+		return err
+	}
+	state.SetActivitySource(func() []hub.ActivityRef {
+		turns := activityTracker.Snapshot()
+		refs := make([]hub.ActivityRef, 0, len(turns))
+		for _, turn := range turns {
+			refs = append(refs, hub.ActivityRef{
+				Username:  turn.Username,
+				SessionID: turn.SessionID,
+				StartedAt: turn.StartedAt,
+				UpdatedAt: turn.UpdatedAt,
+				Running:   turn.Running,
+			})
+		}
+		return refs
+	})
+	retainedHistory, err := usagehistory.Open(*historyFile, *historyRetention)
 	if err != nil {
 		return err
 	}
@@ -196,9 +290,17 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		ReadTimeout:    5 * time.Second,
 		MaxConnections: max(8, len(identities)*2),
 	}
+	activityIngest := &activity.Server{
+		Tracker:        activityTracker,
+		OnChange:       state.Refresh,
+		SocketPath:     *activitySocketPath,
+		SocketGroupID:  activitySocketGroupID,
+		MaxConnections: max(8, len(identities)*2),
+	}
 
-	errC := make(chan error, 2)
+	errC := make(chan error, 3)
 	go func() { errC <- ingest.Serve(ctx) }()
+	go func() { errC <- activityIngest.Serve(ctx) }()
 	go func() {
 		err := httpServer.Serve(listener)
 		if errors.Is(err, http.ErrServerClosed) {
@@ -222,8 +324,25 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	}
 }
 
-func resolveIdentities(usernames []string) ([]hub.Identity, error) {
+func resolveGroupID(name string) (*int, error) {
+	if name == "" {
+		return nil, nil
+	}
+	group, err := osuser.LookupGroup(name)
+	if err != nil {
+		return nil, fmt.Errorf("activity socket group %q does not exist", name)
+	}
+	groupID, err := strconv.ParseUint(group.Gid, 10, 32)
+	if err != nil || groupID > uint64(^uint(0)>>1) {
+		return nil, fmt.Errorf("activity socket group %q has an invalid GID", name)
+	}
+	result := int(groupID)
+	return &result, nil
+}
+
+func resolveIdentities(usernames []string, anchors anchorList) ([]hub.Identity, error) {
 	identities := make([]hub.Identity, 0, len(usernames))
+	seen := make(map[string]bool, len(usernames))
 	for _, username := range usernames {
 		entry, err := osuser.Lookup(username)
 		if err != nil {
@@ -233,7 +352,17 @@ func resolveIdentities(usernames []string) ([]hub.Identity, error) {
 		if err != nil {
 			return nil, fmt.Errorf("Linux user %q has an invalid UID", username)
 		}
-		identities = append(identities, hub.Identity{Username: username, UID: uint32(uid)})
+		seen[username] = true
+		identities = append(identities, hub.Identity{
+			Username:      username,
+			UID:           uint32(uid),
+			ExpectedEmail: anchors[username],
+		})
+	}
+	for username := range anchors {
+		if !seen[username] {
+			return nil, fmt.Errorf("anchor user %q is not a configured collector", username)
+		}
 	}
 	return identities, nil
 }

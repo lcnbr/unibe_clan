@@ -12,7 +12,7 @@
     description = "Host the Codex usage dashboard and its per-user collectors";
 
     perInstance = { ... }: {
-      nixosModule = { pkgs, ... }: {
+      nixosModule = { config, lib, pkgs, ... }: {
         imports = [
           ../packages/codex-usage-dashboard/nix/module.nix
         ];
@@ -22,16 +22,16 @@
           package = pkgs.callPackage ../packages/codex-usage-dashboard/package.nix { };
           codexPackage = pkgs.codex;
           expectedCodexVersion = "0.149.0";
-          users = [
-            "codex"
-            "codex-1"
-            "codex-2"
-            "codex-3"
-            "lcnbr"
-            "nfink"
-            "vhirschi"
-            "zeno"
-          ];
+          users = lib.attrNames (lib.filterAttrs (_: user: user.isNormalUser or false) config.users.users);
+          expectedAnchors = {
+            codex-dummy-0 = "localunitarity@gmail.com";
+            codex-dummy-1 = "localunitarity+1@gmail.com";
+            codex-dummy-2 = "localunitarity+2@gmail.com";
+            codex-dummy-3 = "localunitarity+3@gmail.com";
+          };
+          # Per-user child datasets are created and mounted by this host's
+          # ZFS management unit. Prepare `.codex` only after it completes.
+          homePreparationRequires = [ "zfs-user-datasets.service" ];
           listen = "127.0.0.1:8787";
           allowedHosts = [ "itphlies.tailb3264.ts.net" ];
 

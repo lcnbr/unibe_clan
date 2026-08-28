@@ -3,6 +3,7 @@ package history
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -15,6 +16,7 @@ func historySnapshot(username string, observedAt time.Time, used int, resetAt in
 	email := "private@example.com"
 	duration := mainWeekMinutes
 	resetCredits := int64(3)
+	lifetime := int64(7_777_777)
 	snapshot := model.Snapshot{
 		SchemaVersion: model.SchemaVersion,
 		Username:      username,
@@ -26,15 +28,21 @@ func historySnapshot(username string, observedAt time.Time, used int, resetAt in
 			ResetsAt:           &resetAt,
 		},
 		ResetCreditsAvailable: &resetCredits,
-		Limits:                []model.RateLimit{},
-		ObservedAt:            observedAt,
+		LifetimeTokens:        &lifetime,
+		LifetimeTokensRead:    true,
+		RecentThreadsRead:     true,
+		RecentThreads: []model.RecentThread{{
+			ThreadID: "thread-private-id", TaskName: "Private task name",
+		}},
+		Limits:     []model.RateLimit{},
+		ObservedAt: observedAt,
 	}
 	snapshot.Normalize()
 	return snapshot
 }
 
 func TestSlidingZeroWindowNeverBecomesAnchored(t *testing.T) {
-	tracker, err := Open("", []string{"zeno"}, 56*24*time.Hour)
+	tracker, err := Open("", 56*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,8 +57,8 @@ func TestSlidingZeroWindowNeverBecomesAnchored(t *testing.T) {
 		tracker.Observe(historySnapshot("zeno", observedAt, 0, resetAt))
 	}
 	got := tracker.Snapshot()
-	if got.Revision != initialRevision {
-		t.Fatalf("sliding zero window changed revision from %d to %d", initialRevision, got.Revision)
+	if got.Revision != initialRevision+1 {
+		t.Fatalf("dynamic account registration changed revision from %d to %d", initialRevision, got.Revision)
 	}
 	if got.Accounts[0].Active != nil || len(got.Accounts[0].Events) != 0 {
 		t.Fatalf("sliding zero window became history: %#v", got.Accounts[0])
@@ -58,7 +66,7 @@ func TestSlidingZeroWindowNeverBecomesAnchored(t *testing.T) {
 }
 
 func TestFixedZeroAnchorsAndCompletesExactlyOnce(t *testing.T) {
-	tracker, err := Open("", []string{"vhirschi"}, 56*24*time.Hour)
+	tracker, err := Open("", 56*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +103,7 @@ func TestFixedZeroAnchorsAndCompletesExactlyOnce(t *testing.T) {
 
 func TestPositiveWindowPersistsAndReloadsPrivately(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "history.json")
-	tracker, err := Open(path, []string{"lcnbr"}, 56*24*time.Hour)
+	tracker, err := Open(path, 56*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,10 +125,23 @@ func TestPositiveWindowPersistsAndReloadsPrivately(t *testing.T) {
 		}
 		for _, forbidden := range [][]byte{
 			[]byte("private@example.com"),
+			[]byte("lcnbr"),
+			[]byte("username"),
 			[]byte("Spark"),
 			[]byte("credits"),
 			[]byte("resetCreditsAvailable"),
 			[]byte("accountId"),
+			[]byte("lifetimeTokens"),
+			[]byte("tokens"),
+			[]byte("7777777"),
+			[]byte("users"),
+			[]byte("membership"),
+			[]byte("activeChats"),
+			[]byte("recentThreads"),
+			[]byte("taskName"),
+			[]byte("threadId"),
+			[]byte("Private task name"),
+			[]byte("thread-private-id"),
 		} {
 			if bytes.Contains(payload, forbidden) {
 				t.Fatalf("history contains forbidden account data %q", forbidden)
@@ -128,7 +149,7 @@ func TestPositiveWindowPersistsAndReloadsPrivately(t *testing.T) {
 		}
 	}
 
-	reloaded, err := Open(path, []string{"lcnbr"}, 56*24*time.Hour)
+	reloaded, err := Open(path, 56*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,9 +164,70 @@ func TestPositiveWindowPersistsAndReloadsPrivately(t *testing.T) {
 	}
 }
 
+func TestFreshAccountHistoryFilesLeaveLegacyFilesUntouched(t *testing.T) {
+	directory := t.TempDir()
+	legacyHistory := filepath.Join(directory, "history.json")
+	legacyAdjustments := filepath.Join(directory, "history-adjustments.json")
+	legacyTime := time.Unix(1_700_000_000, 0).UTC()
+	legacyPayloads := map[string][]byte{
+		legacyHistory:     []byte("legacy username-keyed history\n"),
+		legacyAdjustments: []byte("legacy username-keyed adjustments\n"),
+	}
+	for path, payload := range legacyPayloads {
+		if err := os.WriteFile(path, payload, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, legacyTime, legacyTime); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	accountHistory := filepath.Join(directory, "account-history.json")
+	if _, err := Open(accountHistory, 366*24*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{accountHistory, filepath.Join(directory, "account-adjustments.json")} {
+		if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
+			t.Fatalf("new account history file %q: info=%v err=%v", path, info, err)
+		}
+	}
+	for path, want := range legacyPayloads {
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, want) || !info.ModTime().Equal(legacyTime) {
+			t.Fatalf("legacy file changed: path=%q payload=%q mtime=%v", path, got, info.ModTime())
+		}
+	}
+}
+
+func TestDuplicateAccountObservationDoesNotCreateResetOrAdjustment(t *testing.T) {
+	tracker, err := Open("", 366*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	tracker.now = func() time.Time { return now }
+	snapshot := historySnapshot("canonical-user", now, 35, now.Add(6*24*time.Hour).Unix())
+	tracker.Observe(snapshot)
+	first := tracker.Snapshot()
+	tracker.Observe(snapshot)
+	second := tracker.Snapshot()
+	if len(second.Accounts) != 1 || second.Accounts[0].Active == nil ||
+		len(second.Accounts[0].Events) != 0 || len(second.Accounts[0].Adjustments) != 0 ||
+		second.Revision != first.Revision {
+		t.Fatalf("duplicate observation changed history: before=%#v after=%#v", first, second)
+	}
+}
+
 func TestPreExpiryResetChangePersistsWithoutChangingV1CoreSchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "history.json")
-	tracker, err := Open(path, []string{"lcnbr"}, 56*24*time.Hour)
+	tracker, err := Open(path, 56*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +283,7 @@ func TestPreExpiryResetChangePersistsWithoutChangingV1CoreSchema(t *testing.T) {
 	if got := sidecarInfo.Mode().Perm(); got != 0o600 {
 		t.Fatalf("adjustment sidecar mode = %o, want 600", got)
 	}
-	reloaded, err := Open(path, []string{"lcnbr"}, 56*24*time.Hour)
+	reloaded, err := Open(path, 56*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,8 +292,203 @@ func TestPreExpiryResetChangePersistsWithoutChangingV1CoreSchema(t *testing.T) {
 	}
 }
 
+func TestInferredEarlyResetPointIsDerivedFromPersistedAdjustment(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "account-history.json")
+	tracker, err := Open(path, 366*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now().UTC().Truncate(time.Second)
+	now := start
+	tracker.now = func() time.Time { return now }
+	oldReset := start.Add(6 * 24 * time.Hour).Unix()
+	tracker.Observe(historySnapshot("collector-a", start, 82, oldReset))
+
+	now = start.Add(2 * time.Hour)
+	newReset := now.Add(7 * 24 * time.Hour).Unix()
+	tracker.Observe(historySnapshot("collector-a", now, 0, newReset))
+	got := tracker.Snapshot().Accounts[0]
+	if len(got.Events) != 0 || len(got.Adjustments) != 1 || len(got.ResetPoints) != 1 {
+		t.Fatalf("early reset history = %#v", got)
+	}
+	point := got.ResetPoints[0]
+	if point.Kind != ResetPointInferredEarly || point.At != now.Unix() ||
+		!point.DetectedAt.Equal(now) || point.UsedPercentBefore != 82 ||
+		point.PreviousScheduledAt == nil || *point.PreviousScheduledAt != oldReset ||
+		point.NextScheduledAt == nil || *point.NextScheduledAt != newReset {
+		t.Fatalf("inferred reset point = %#v", point)
+	}
+
+	// Reset points are a public projection. Existing disk schema v2 remains
+	// unchanged and the point is recovered from its retained adjustment.
+	for _, historyPath := range []string{path, adjustmentPathFor(path)} {
+		payload, err := os.ReadFile(historyPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(payload, []byte("resetPoints")) || !bytes.Contains(payload, []byte(`"schemaVersion":2`)) {
+			t.Fatalf("reset-point projection changed disk schema: %s", payload)
+		}
+	}
+	reloaded, err := Open(path, 366*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloadedPoints := reloaded.Snapshot().Accounts[0].ResetPoints
+	if len(reloadedPoints) != 1 || reloadedPoints[0].Kind != ResetPointInferredEarly ||
+		reloadedPoints[0].At != now.Unix() {
+		t.Fatalf("persisted adjustment did not recover reset point: %#v", reloadedPoints)
+	}
+}
+
+func TestResetPointInferenceRequiresPlausibleNewWindow(t *testing.T) {
+	detected := time.Now().UTC().Truncate(time.Second)
+	base := storedAdjustment{Adjustment: Adjustment{
+		DetectedAt: detected,
+		Reasons:    []string{AdjustmentResetTimestampChanged, AdjustmentUsedPercentDecreased},
+		Before: WindowObservation{
+			WindowStartedAt: detected.Add(-6 * 24 * time.Hour).Unix(),
+			ResetsAt:        detected.Add(24 * time.Hour).Unix(),
+			FirstObservedAt: detected.Add(-time.Hour),
+			UsedPercent:     80,
+		},
+		After: WindowObservation{
+			WindowStartedAt: detected.Add(-30 * time.Minute).Unix(),
+			ResetsAt:        detected.Add(6*24*time.Hour + 23*time.Hour + 30*time.Minute).Unix(),
+			FirstObservedAt: detected,
+			UsedPercent:     3,
+		},
+	}, CoreRevisionBefore: 1}
+	if point, ok := inferredResetPoint(base); !ok || point.At != base.After.WindowStartedAt {
+		t.Fatalf("delayed but plausible reset was not inferred: point=%#v ok=%v", point, ok)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*storedAdjustment)
+	}{
+		{
+			name: "timestamp only",
+			mutate: func(value *storedAdjustment) {
+				value.Reasons = []string{AdjustmentResetTimestampChanged}
+				value.After.UsedPercent = value.Before.UsedPercent
+			},
+		},
+		{
+			name: "usage only",
+			mutate: func(value *storedAdjustment) {
+				value.Reasons = []string{AdjustmentUsedPercentDecreased}
+				value.After.ResetsAt = value.Before.ResetsAt
+				value.After.WindowStartedAt = value.Before.WindowStartedAt
+			},
+		},
+		{
+			name: "window start predates replaced observation",
+			mutate: func(value *storedAdjustment) {
+				value.After.WindowStartedAt = value.Before.FirstObservedAt.Add(-time.Second).Unix()
+				value.After.ResetsAt = value.After.WindowStartedAt + mainWeekMinutes*60
+			},
+		},
+		{
+			name: "window start too old",
+			mutate: func(value *storedAdjustment) {
+				value.After.WindowStartedAt = detected.Add(-time.Duration(resetObservationMaxLag)*time.Second - time.Second).Unix()
+				value.After.ResetsAt = value.After.WindowStartedAt + mainWeekMinutes*60
+			},
+		},
+		{
+			name: "window start too far in future",
+			mutate: func(value *storedAdjustment) {
+				value.After.WindowStartedAt = detected.Add(time.Duration(resetObservationFutureSkew)*time.Second + time.Second).Unix()
+				value.After.ResetsAt = value.After.WindowStartedAt + mainWeekMinutes*60
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := base
+			candidate.Reasons = append([]string(nil), base.Reasons...)
+			test.mutate(&candidate)
+			if point, ok := inferredResetPoint(candidate); ok {
+				t.Fatalf("non-reset adjustment produced point %#v", point)
+			}
+		})
+	}
+}
+
+func TestResetPointsIncludeScheduledEventsAndPreferThemWhenDeduplicating(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	resetAt := now.Add(-time.Hour).Unix()
+	event := ResetEvent{
+		WindowStartedAt: resetAt - mainWeekMinutes*60,
+		ResetsAt:        resetAt, DetectedAt: now, UsedPercentBefore: 64,
+	}
+	adjustment := storedAdjustment{Adjustment: Adjustment{
+		DetectedAt: now,
+		Reasons:    []string{AdjustmentResetTimestampChanged, AdjustmentUsedPercentDecreased},
+		Before: WindowObservation{
+			WindowStartedAt: resetAt - mainWeekMinutes*60,
+			ResetsAt:        resetAt + int64((2*time.Hour)/time.Second), FirstObservedAt: now.Add(-time.Hour), UsedPercent: 64,
+		},
+		After: WindowObservation{
+			WindowStartedAt: resetAt + resetTimestampJitterSeconds,
+			ResetsAt:        resetAt + resetTimestampJitterSeconds + mainWeekMinutes*60,
+			FirstObservedAt: now, UsedPercent: 0,
+		},
+	}, CoreRevisionBefore: 1}
+	points := publicResetPoints([]ResetEvent{event}, []storedAdjustment{adjustment})
+	if len(points) != 1 || points[0].Kind != ResetPointScheduled || points[0].At != resetAt {
+		t.Fatalf("reset-point deduplication = %#v", points)
+	}
+}
+
+func TestRebaselinePreservesUnambiguousEarlyReset(t *testing.T) {
+	tracker, err := Open("", 366*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now().UTC().Truncate(time.Second)
+	now := start
+	tracker.now = func() time.Time { return now }
+	oldReset := start.Add(5 * 24 * time.Hour).Unix()
+	tracker.Observe(historySnapshot("first-source", start, 75, oldReset))
+
+	now = start.Add(time.Hour)
+	newReset := now.Add(7 * 24 * time.Hour).Unix()
+	tracker.Rebaseline(historySnapshot("replacement-source", now, 0, newReset))
+	got := tracker.Snapshot().Accounts[0]
+	if len(got.Adjustments) != 1 || len(got.ResetPoints) != 1 ||
+		got.ResetPoints[0].Kind != ResetPointInferredEarly || got.ResetPoints[0].At != now.Unix() {
+		t.Fatalf("rebaseline erased an unambiguous early reset: %#v", got)
+	}
+}
+
+func TestRebaselineDoesNotInferResetBeforePreviousObservation(t *testing.T) {
+	tracker, err := Open("", 366*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now().UTC().Truncate(time.Second)
+	now := start
+	tracker.now = func() time.Time { return now }
+	oldReset := start.Add(6 * 24 * time.Hour).Unix()
+	tracker.Observe(historySnapshot("first-source", start, 80, oldReset))
+
+	// This replacement's derived start is 22 hours before the prior window was
+	// observed. It falls inside the broad 24-hour lag allowance, but cannot be a
+	// reset transition between the two observations.
+	now = start.Add(time.Hour)
+	newReset := start.Add(6*24*time.Hour + 2*time.Hour).Unix()
+	tracker.Rebaseline(historySnapshot("replacement-source", now, 20, newReset))
+	got := tracker.Snapshot().Accounts[0]
+	if got.Active == nil || got.Active.ResetsAt != newReset || got.Active.UsedPercent != 20 ||
+		len(got.Adjustments) != 0 || len(got.ResetPoints) != 0 {
+		t.Fatalf("source discrepancy became an inferred reset: %#v", got)
+	}
+}
+
 func TestSameResetUsageDecreaseIsAdjustment(t *testing.T) {
-	tracker, err := Open("", []string{"codex"}, 56*24*time.Hour)
+	tracker, err := Open("", 56*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +513,7 @@ func TestSameResetUsageDecreaseIsAdjustment(t *testing.T) {
 }
 
 func TestResetTimestampJitterIsIgnored(t *testing.T) {
-	tracker, err := Open("", []string{"codex"}, 56*24*time.Hour)
+	tracker, err := Open("", 56*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +535,7 @@ func TestResetTimestampJitterIsIgnored(t *testing.T) {
 }
 
 func TestResetTimestampJitterPreservesUsageDecrease(t *testing.T) {
-	tracker, err := Open("", []string{"codex"}, 56*24*time.Hour)
+	tracker, err := Open("", 56*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +560,7 @@ func TestResetTimestampJitterPreservesUsageDecrease(t *testing.T) {
 }
 
 func TestResetTimestampShiftBeyondJitterIsAdjustment(t *testing.T) {
-	tracker, err := Open("", []string{"codex"}, 56*24*time.Hour)
+	tracker, err := Open("", 56*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +585,7 @@ func TestResetTimestampShiftBeyondJitterIsAdjustment(t *testing.T) {
 }
 
 func TestJitterAtScheduledBoundaryDoesNotCreateDuplicateWindow(t *testing.T) {
-	tracker, err := Open("", []string{"codex"}, 56*24*time.Hour)
+	tracker, err := Open("", 56*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +616,7 @@ func TestJitterAtScheduledBoundaryDoesNotCreateDuplicateWindow(t *testing.T) {
 func TestNewWindowInsideEarlyBoundaryJitterCompletesNormally(t *testing.T) {
 	for _, lead := range []time.Duration{time.Second, time.Duration(resetTimestampJitterSeconds) * time.Second} {
 		t.Run(lead.String(), func(t *testing.T) {
-			tracker, err := Open("", []string{"codex"}, 56*24*time.Hour)
+			tracker, err := Open("", 56*24*time.Hour)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -370,7 +647,7 @@ func TestOpenWaitsForResetTimestampJitterBeforePruning(t *testing.T) {
 		Revision:      7,
 		TrackingSince: now.Add(-24 * time.Hour),
 		Accounts: map[string]diskAccount{
-			"codex": {
+			model.AccountKey("private@example.com"): {
 				Active: &ResetWindow{
 					WindowStartedAt: resetAt - mainWeekMinutes*60,
 					ResetsAt:        resetAt,
@@ -385,7 +662,7 @@ func TestOpenWaitsForResetTimestampJitterBeforePruning(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	opened, err := Open(path, []string{"codex"}, 56*24*time.Hour)
+	opened, err := Open(path, 56*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,7 +673,7 @@ func TestOpenWaitsForResetTimestampJitterBeforePruning(t *testing.T) {
 }
 
 func TestFixedZeroToSlidingZeroCreatesOneAdjustment(t *testing.T) {
-	tracker, err := Open("", []string{"vhirschi"}, 56*24*time.Hour)
+	tracker, err := Open("", 56*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -426,7 +703,7 @@ func TestFixedZeroToSlidingZeroCreatesOneAdjustment(t *testing.T) {
 }
 
 func TestExactExpiryIsCompletionNotAdjustment(t *testing.T) {
-	tracker, err := Open("", []string{"codex"}, 56*24*time.Hour)
+	tracker, err := Open("", 56*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -446,7 +723,7 @@ func TestExactExpiryIsCompletionNotAdjustment(t *testing.T) {
 
 func TestSidecarFirstRetryIsIdempotent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "history.json")
-	tracker, err := Open(path, []string{"codex"}, 56*24*time.Hour)
+	tracker, err := Open(path, 56*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -458,7 +735,8 @@ func TestSidecarFirstRetryIsIdempotent(t *testing.T) {
 
 	serverNow = start.Add(time.Hour)
 	newReset := serverNow.Add(7 * 24 * time.Hour).Unix()
-	active := *tracker.accounts["codex"].Active
+	accountKey := model.AccountKey("private@example.com")
+	active := *tracker.accounts[accountKey].Active
 	proposed := ResetWindow{
 		WindowStartedAt: newReset - mainWeekMinutes*60,
 		ResetsAt:        newReset,
@@ -474,14 +752,14 @@ func TestSidecarFirstRetryIsIdempotent(t *testing.T) {
 		},
 		CoreRevisionBefore: tracker.coreRevision,
 	}
-	tracker.adjustments["codex"], _ = appendAdjustment(tracker.adjustments["codex"], adjustment)
+	tracker.adjustments[accountKey], _ = appendAdjustment(tracker.adjustments[accountKey], adjustment)
 	tracker.revision++
 	tracker.adjustmentsDirty = true
 	if err := tracker.persistAdjustmentsLocked(); err != nil {
 		t.Fatal(err)
 	}
 
-	reloaded, err := Open(path, []string{"codex"}, 56*24*time.Hour)
+	reloaded, err := Open(path, 56*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -519,7 +797,7 @@ func TestSidecarRecoveryPrecedesExpiredCorePruning(t *testing.T) {
 		Revision:      7,
 		TrackingSince: now.Add(-10 * 24 * time.Hour),
 		Accounts: map[string]diskAccount{
-			"codex": {
+			model.AccountKey("private@example.com"): {
 				Active: &ResetWindow{
 					WindowStartedAt: before.WindowStartedAt,
 					ResetsAt:        before.ResetsAt,
@@ -535,7 +813,7 @@ func TestSidecarRecoveryPrecedesExpiredCorePruning(t *testing.T) {
 		Revision:      8,
 		TrackingSince: detectedAt,
 		Accounts: map[string][]storedAdjustment{
-			"codex": {{
+			model.AccountKey("private@example.com"): {{
 				Adjustment: Adjustment{
 					DetectedAt: detectedAt,
 					Reasons:    []string{AdjustmentResetTimestampChanged, AdjustmentUsedPercentDecreased},
@@ -553,7 +831,7 @@ func TestSidecarRecoveryPrecedesExpiredCorePruning(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	recovered, err := Open(path, []string{"codex"}, 56*24*time.Hour)
+	recovered, err := Open(path, 56*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -565,8 +843,8 @@ func TestSidecarRecoveryPrecedesExpiredCorePruning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if persisted.Accounts["codex"].Active != nil || len(persisted.Accounts["codex"].Events) != 0 {
-		t.Fatalf("recovered core was not persisted: %#v", persisted.Accounts["codex"])
+	if persisted.Accounts[model.AccountKey("private@example.com")].Active != nil || len(persisted.Accounts[model.AccountKey("private@example.com")].Events) != 0 {
+		t.Fatalf("recovered core was not persisted: %#v", persisted.Accounts[model.AccountKey("private@example.com")])
 	}
 }
 
@@ -589,7 +867,7 @@ func TestSidecarRecoveryReplaysAdjustmentChain(t *testing.T) {
 		Revision:      7,
 		TrackingSince: now.Add(-24 * time.Hour),
 		Accounts: map[string]diskAccount{
-			"codex": {
+			model.AccountKey("private@example.com"): {
 				Active: &ResetWindow{
 					WindowStartedAt: before.WindowStartedAt,
 					ResetsAt:        before.ResetsAt,
@@ -605,7 +883,7 @@ func TestSidecarRecoveryReplaysAdjustmentChain(t *testing.T) {
 		Revision:      9,
 		TrackingSince: now.Add(-time.Hour),
 		Accounts: map[string][]storedAdjustment{
-			"codex": {
+			model.AccountKey("private@example.com"): {
 				{
 					Adjustment: Adjustment{
 						DetectedAt: now.Add(-2 * time.Minute),
@@ -634,7 +912,7 @@ func TestSidecarRecoveryReplaysAdjustmentChain(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	recovered, err := Open(path, []string{"codex"}, 56*24*time.Hour)
+	recovered, err := Open(path, 56*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -647,9 +925,9 @@ func TestSidecarRecoveryReplaysAdjustmentChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if persisted.Accounts["codex"].Active == nil ||
-		persisted.Accounts["codex"].Active.UsedPercent != after.UsedPercent {
-		t.Fatalf("chained recovery was not persisted: %#v", persisted.Accounts["codex"])
+	if persisted.Accounts[model.AccountKey("private@example.com")].Active == nil ||
+		persisted.Accounts[model.AccountKey("private@example.com")].Active.UsedPercent != after.UsedPercent {
+		t.Fatalf("chained recovery was not persisted: %#v", persisted.Accounts[model.AccountKey("private@example.com")])
 	}
 }
 
@@ -672,7 +950,7 @@ func TestOpenRemovesPreviouslyRecordedTimestampJitter(t *testing.T) {
 		Revision:      8,
 		TrackingSince: now.Add(-24 * time.Hour),
 		Accounts: map[string]diskAccount{
-			"codex": {
+			model.AccountKey("private@example.com"): {
 				Active: &ResetWindow{
 					WindowStartedAt: after.WindowStartedAt,
 					ResetsAt:        after.ResetsAt,
@@ -688,7 +966,7 @@ func TestOpenRemovesPreviouslyRecordedTimestampJitter(t *testing.T) {
 		Revision:      8,
 		TrackingSince: now.Add(-time.Hour),
 		Accounts: map[string][]storedAdjustment{
-			"codex": {{
+			model.AccountKey("private@example.com"): {{
 				Adjustment: Adjustment{
 					DetectedAt: now.Add(-2 * time.Minute),
 					Reasons:    []string{AdjustmentResetTimestampChanged},
@@ -706,7 +984,7 @@ func TestOpenRemovesPreviouslyRecordedTimestampJitter(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	opened, err := Open(path, []string{"codex"}, 56*24*time.Hour)
+	opened, err := Open(path, 56*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -718,7 +996,7 @@ func TestOpenRemovesPreviouslyRecordedTimestampJitter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := persisted.Accounts["codex"]; len(got) != 0 {
+	if got := persisted.Accounts[model.AccountKey("private@example.com")]; len(got) != 0 {
 		t.Fatalf("timestamp jitter remained on disk = %#v", got)
 	}
 }
@@ -730,7 +1008,7 @@ func TestResetMoveOutsideBoundaryJitterIsAdjustment(t *testing.T) {
 		5 * time.Minute,
 	} {
 		t.Run(lead.String(), func(t *testing.T) {
-			tracker, err := Open("", []string{"codex"}, 56*24*time.Hour)
+			tracker, err := Open("", 56*24*time.Hour)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -760,7 +1038,7 @@ func TestAddingSidecarLeavesExistingV1BytesUntouched(t *testing.T) {
 		Revision:      7,
 		TrackingSince: now.Add(-24 * time.Hour),
 		Accounts: map[string]diskAccount{
-			"codex": {
+			model.AccountKey("private@example.com"): {
 				Active: &ResetWindow{
 					WindowStartedAt: resetAt - mainWeekMinutes*60,
 					ResetsAt:        resetAt,
@@ -778,7 +1056,7 @@ func TestAddingSidecarLeavesExistingV1BytesUntouched(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Open(path, []string{"codex"}, 56*24*time.Hour); err != nil {
+	if _, err := Open(path, 56*24*time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	after, err := os.ReadFile(path)
@@ -795,7 +1073,7 @@ func TestAddingSidecarLeavesExistingV1BytesUntouched(t *testing.T) {
 
 func TestCorruptAdjustmentSidecarFailsWithoutOverwriting(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "history.json")
-	if _, err := Open(path, []string{"codex"}, 14*24*time.Hour); err != nil {
+	if _, err := Open(path, 14*24*time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	sidecar := adjustmentPathFor(path)
@@ -803,7 +1081,7 @@ func TestCorruptAdjustmentSidecarFailsWithoutOverwriting(t *testing.T) {
 	if err := os.WriteFile(sidecar, original, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Open(path, []string{"codex"}, 14*24*time.Hour); err == nil {
+	if _, err := Open(path, 14*24*time.Hour); err == nil {
 		t.Fatal("corrupt adjustment sidecar unexpectedly loaded")
 	}
 	after, err := os.ReadFile(sidecar)
@@ -816,7 +1094,7 @@ func TestCorruptAdjustmentSidecarFailsWithoutOverwriting(t *testing.T) {
 }
 
 func TestPruneKeepsOnlyRetainedCompletedEvents(t *testing.T) {
-	tracker, err := Open("", []string{"codex"}, 14*24*time.Hour)
+	tracker, err := Open("", 14*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -824,15 +1102,57 @@ func TestPruneKeepsOnlyRetainedCompletedEvents(t *testing.T) {
 	tracker.now = func() time.Time { return now }
 	oldReset := now.Add(-15 * 24 * time.Hour).Unix()
 	recentReset := now.Add(-2 * 24 * time.Hour).Unix()
-	tracker.accounts["codex"] = diskAccount{Events: []ResetEvent{
+	accountKey := model.AccountKey("private@example.com")
+	tracker.accounts[accountKey] = diskAccount{Events: []ResetEvent{
 		{WindowStartedAt: oldReset - mainWeekMinutes*60, ResetsAt: oldReset, DetectedAt: now.Add(-15 * 24 * time.Hour)},
 		{WindowStartedAt: recentReset - mainWeekMinutes*60, ResetsAt: recentReset, DetectedAt: now.Add(-2 * 24 * time.Hour)},
 	}}
+	tracker.adjustments[accountKey] = []storedAdjustment{}
+	tracker.order = []string{accountKey}
 
 	tracker.Observe(model.Snapshot{})
 	events := tracker.Snapshot().Accounts[0].Events
 	if len(events) != 1 || events[0].ResetsAt != recentReset {
 		t.Fatalf("pruned events = %#v", events)
+	}
+}
+
+func TestRetentionPrunesAt366Days(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "account-history.json")
+	tracker, err := Open(path, 366*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now().UTC().Truncate(time.Second)
+	now := start
+	tracker.now = func() time.Time { return now }
+	resetAt := start.Add(6 * 24 * time.Hour).Unix()
+	tracker.Observe(historySnapshot("canonical", start, 40, resetAt))
+	now = start.Add(time.Hour)
+	tracker.Observe(historySnapshot("canonical", now, 30, resetAt))
+	before := tracker.Snapshot()
+	if len(before.Accounts) != 1 || before.Accounts[0].Active == nil ||
+		len(before.Accounts[0].Adjustments) != 1 {
+		t.Fatalf("test history was not established: %#v", before)
+	}
+
+	// No Observe or Rebaseline call occurs after this point. Reading history
+	// alone must enforce and persist the retention guarantee.
+	now = start.Add(374 * 24 * time.Hour)
+	got := tracker.Snapshot()
+	if got.RetentionDays != 366 || len(got.Accounts) != 0 {
+		t.Fatalf("366-day snapshot pruning = %#v", got)
+	}
+	reloaded, err := Open(path, 366*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted := reloaded.Snapshot()
+	if len(persisted.Accounts) != 0 {
+		t.Fatalf("snapshot pruning was not persisted: %#v", persisted)
+	}
+	if _, err := Open("", 366*24*time.Hour+time.Second); err == nil {
+		t.Fatal("retention above 366 days unexpectedly accepted")
 	}
 }
 
@@ -842,7 +1162,7 @@ func TestCorruptHistoryFailsWithoutOverwriting(t *testing.T) {
 	if err := os.WriteFile(path, original, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Open(path, []string{"codex"}, 14*24*time.Hour); err == nil {
+	if _, err := Open(path, 14*24*time.Hour); err == nil {
 		t.Fatal("corrupt history unexpectedly loaded")
 	}
 	after, err := os.ReadFile(path)
@@ -856,21 +1176,98 @@ func TestCorruptHistoryFailsWithoutOverwriting(t *testing.T) {
 
 func TestAncientCollectorTimestampCannotPoisonState(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "history.json")
-	tracker, err := Open(path, []string{"codex"}, 14*24*time.Hour)
+	tracker, err := Open(path, 14*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	initial := tracker.Snapshot().Revision
 	ancient := historySnapshot("codex", time.Unix(0, 0).UTC(), 20, 1)
 	if err := ancient.Validate(); err == nil {
 		t.Fatal("invalid weekly window start unexpectedly validated")
 	}
 	tracker.Observe(ancient)
-	if got := tracker.Snapshot(); got.Revision != initial || got.Accounts[0].Active != nil {
+	if got := tracker.Snapshot(); len(got.Accounts) != 0 {
 		t.Fatalf("ancient snapshot changed history: %#v", got)
 	}
-	if _, err := Open(path, []string{"codex"}, 14*24*time.Hour); err != nil {
+	if _, err := Open(path, 14*24*time.Hour); err != nil {
 		t.Fatalf("ignored snapshot poisoned persisted state: %v", err)
+	}
+}
+
+func TestResetHistorySafetyCapsCoverAtLeastTwoPointsPerRetentionDay(t *testing.T) {
+	minimum := 2 * 366
+	if maxEventsPerAccount < minimum || maxAdjustments < minimum || maxResetPointsPerAccount < minimum {
+		t.Fatalf("annual safety caps events=%d adjustments=%d points=%d, want each >= %d",
+			maxEventsPerAccount, maxAdjustments, maxResetPointsPerAccount, minimum)
+	}
+}
+
+func TestAccountAdmissionHonorsDiskCapAndReusesEmptyLane(t *testing.T) {
+	tracker, err := Open("", 366*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	tracker.now = func() time.Time { return now }
+	resetAt := now.Add(6 * 24 * time.Hour).Unix()
+	keys := make([]string, 0, maxHistoryAccounts)
+	for index := 0; index < maxHistoryAccounts; index++ {
+		snapshot := historySnapshot("collector", now, 1, resetAt)
+		email := fmt.Sprintf("account-%03d@example.com", index)
+		snapshot.Account.Email = &email
+		keys = append(keys, model.AccountKey(email))
+		tracker.Observe(snapshot)
+	}
+	if len(tracker.accounts) != maxHistoryAccounts {
+		t.Fatalf("admitted account lanes = %d, want %d", len(tracker.accounts), maxHistoryAccounts)
+	}
+
+	overflow := historySnapshot("collector", now, 1, resetAt)
+	overflowEmail := "overflow@example.com"
+	overflow.Account.Email = &overflowEmail
+	overflowKey := model.AccountKey(overflowEmail)
+	tracker.Observe(overflow)
+	if len(tracker.accounts) != maxHistoryAccounts {
+		t.Fatalf("overflow changed account count to %d", len(tracker.accounts))
+	}
+	if _, admitted := tracker.accounts[overflowKey]; admitted {
+		t.Fatal("account beyond the disk cap was admitted")
+	}
+
+	// Once a lane has no retained state, normal pruning can remove it without
+	// violating retention and the next account can be admitted safely.
+	emptyKey := keys[0]
+	tracker.accounts[emptyKey] = diskAccount{Events: []ResetEvent{}}
+	tracker.adjustments[emptyKey] = []storedAdjustment{}
+	tracker.Observe(overflow)
+	if len(tracker.accounts) != maxHistoryAccounts {
+		t.Fatalf("replacement changed account count to %d", len(tracker.accounts))
+	}
+	if _, retained := tracker.accounts[emptyKey]; retained {
+		t.Fatal("empty expired lane was not pruned")
+	}
+	if _, admitted := tracker.accounts[overflowKey]; !admitted {
+		t.Fatal("new account was not admitted after safe pruning")
+	}
+}
+
+func TestExpiredZeroCandidateReleasesAccountLane(t *testing.T) {
+	tracker, err := Open("", 366*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	tracker.now = func() time.Time { return now }
+	resetAt := now.Add(7 * 24 * time.Hour).Unix()
+	tracker.Observe(historySnapshot("collector", now, 0, resetAt))
+	if len(tracker.accounts) != 1 || len(tracker.candidates) != 1 {
+		t.Fatalf("zero-use candidate was not established: accounts=%d candidates=%d",
+			len(tracker.accounts), len(tracker.candidates))
+	}
+
+	now = now.Add(8 * 24 * time.Hour)
+	got := tracker.Snapshot()
+	if len(got.Accounts) != 0 || len(tracker.candidates) != 0 {
+		t.Fatalf("expired zero-use candidate retained a lane: %#v", got)
 	}
 }
 

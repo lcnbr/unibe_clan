@@ -5,15 +5,35 @@ let
   pkgs = nixpkgs.legacyPackages.${system};
 
   usernames = [
+    "mercury"
+    "lcnbr"
+    "vhirschi"
+    "zeno"
+    "fraaije"
+    "simone"
+    "alice"
+    "bobby"
+    "ben"
+    "kaapo"
+    "nfink"
+    "cedric"
+    "kotarela"
     "codex"
     "codex-1"
     "codex-2"
     "codex-3"
-    "lcnbr"
-    "nfink"
-    "vhirschi"
-    "zeno"
+    "codex-dummy-0"
+    "codex-dummy-1"
+    "codex-dummy-2"
+    "codex-dummy-3"
   ];
+
+  expectedAnchors = {
+    codex-dummy-0 = "localunitarity@gmail.com";
+    codex-dummy-1 = "localunitarity+1@gmail.com";
+    codex-dummy-2 = "localunitarity+2@gmail.com";
+    codex-dummy-3 = "localunitarity+3@gmail.com";
+  };
 
   fakeDashboard = pkgs.writeShellScriptBin "codex-usage-dashboard" ''
     exit 0
@@ -37,6 +57,8 @@ let
         services.codexUsageDashboard = {
           enable = true;
           package = fakeDashboard;
+          users = usernames;
+          inherit expectedAnchors;
           allowedHosts = [ "itphlies.tailb3264.ts.net" ];
         };
 
@@ -50,25 +72,20 @@ let
 
   cfg = machine.config;
   dashboard = cfg.systemd.services.codex-usage-dashboard;
+  homePreparation = cfg.systemd.services.codex-dashboard-home-preparation;
   collector = user: cfg.systemd.services."codex-usage-collector-${user}";
   codexPackagePath = builtins.unsafeDiscardStringContext (
     toString cfg.services.codexUsageDashboard.codexPackage
   );
+  dashboardPackagePath = builtins.unsafeDiscardStringContext (toString fakeDashboard);
+  requirements = cfg.environment.etc."codex/requirements.toml";
 
   generatedUnitNames = builtins.attrNames (
     lib.filterAttrs (name: _: lib.hasPrefix "codex-usage-" name) cfg.systemd.services
   );
-  expectedUnitNames = [
-    "codex-usage-collector-codex"
-    "codex-usage-collector-codex-1"
-    "codex-usage-collector-codex-2"
-    "codex-usage-collector-codex-3"
-    "codex-usage-collector-lcnbr"
-    "codex-usage-collector-nfink"
-    "codex-usage-collector-vhirschi"
-    "codex-usage-collector-zeno"
-    "codex-usage-dashboard"
-  ];
+  expectedUnitNames = lib.sort builtins.lessThan (
+    [ "codex-usage-dashboard" ] ++ map (user: "codex-usage-collector-${user}") usernames
+  );
 
   checks = [
     {
@@ -77,30 +94,43 @@ let
     }
     {
       assertion = generatedUnitNames == expectedUnitNames;
-      message = "the dashboard and eight explicit collector units must be generated";
+      message = "the dashboard and 21 explicit collector units must be generated";
     }
     {
       assertion =
         dashboard.serviceConfig.User == "codex-usage-dashboard"
         && dashboard.serviceConfig.Group == "codex-usage-dashboard"
+        && dashboard.serviceConfig.SupplementaryGroups == [ "users" ]
         && cfg.users.users.codex-usage-dashboard.isSystemUser;
-      message = "the dashboard must run as its dedicated system user and group";
+      message = "the dashboard must use its dedicated identity plus the activity socket group";
     }
     {
       assertion = cfg.users.groups.codex-usage-dashboard.members == usernames;
       message = "all collector users must belong to the ingest group";
     }
     {
-      assertion = builtins.all (
-        user: builtins.elem "d /home/${user}/.codex 0700 ${user} users -" cfg.systemd.tmpfiles.rules
-      ) usernames;
-      message = "each collector state directory must exist before service startup";
+      assertion =
+        homePreparation.before == [ "codex-usage-dashboard.service" ]
+        && homePreparation.after == [ "local-fs.target" ]
+        && homePreparation.requires == [ ]
+        && homePreparation.serviceConfig.Type == "oneshot"
+        && homePreparation.serviceConfig.RemainAfterExit
+        && builtins.all (
+          user:
+          lib.hasInfix "systemd-tmpfiles --create '--prefix=/home/${user}/.codex'" homePreparation.script
+        ) usernames
+        && builtins.all (
+          user: builtins.elem "d /home/${user}/.codex 0700 ${user} users -" cfg.systemd.tmpfiles.rules
+        ) usernames
+        && builtins.elem "codex-dashboard-home-preparation.service" dashboard.after
+        && builtins.elem "codex-dashboard-home-preparation.service" dashboard.requires;
+      message = "collector state directories must be prepared after user homes are mounted";
     }
     {
       assertion =
         dashboard.serviceConfig.ProtectHome == true
         && dashboard.serviceConfig.RuntimeDirectory == "codex-usage-dashboard"
-        && dashboard.serviceConfig.RuntimeDirectoryMode == "0750"
+        && dashboard.serviceConfig.RuntimeDirectoryMode == "0711"
         && dashboard.serviceConfig.StateDirectory == "codex-usage-dashboard"
         && dashboard.serviceConfig.StateDirectoryMode == "0700"
         && dashboard.serviceConfig.UMask == "0077"
@@ -110,8 +140,55 @@ let
       message = "the dashboard hardening and runtime-directory permissions changed";
     }
     {
-      assertion = lib.hasInfix "serve --listen 127.0.0.1:8787 --allowed-host itphlies.tailb3264.ts.net --socket /run/codex-usage-dashboard/ingest.sock --stale-after 90s --history-file /var/lib/codex-usage-dashboard/history.json --history-retention 8784h --user codex --user codex-1 --user codex-2 --user codex-3 --user lcnbr --user nfink --user vhirschi --user zeno" dashboard.serviceConfig.ExecStart;
+      assertion =
+        lib.hasInfix "serve --listen 127.0.0.1:8787 --allowed-host itphlies.tailb3264.ts.net" dashboard.serviceConfig.ExecStart
+        && lib.hasInfix "--socket /run/codex-usage-dashboard/ingest.sock" dashboard.serviceConfig.ExecStart
+        && lib.hasInfix "--activity-socket /run/codex-usage-dashboard/activity.sock --activity-socket-group users --activity-lease 30m" dashboard.serviceConfig.ExecStart
+        && lib.hasInfix "--stale-after 90s --history-file /var/lib/codex-usage-dashboard/account-history.json --history-retention 8784h" dashboard.serviceConfig.ExecStart
+        && builtins.all (user: lib.hasInfix "--user ${user}" dashboard.serviceConfig.ExecStart) usernames
+        && builtins.all (
+          user:
+          lib.hasInfix (lib.escapeShellArgs [
+            "--anchor"
+            "${user}=${expectedAnchors.${user}}"
+          ]) dashboard.serviceConfig.ExecStart
+        ) (builtins.attrNames expectedAnchors)
+        && !(lib.hasInfix "/var/lib/codex-usage-dashboard/history.json" dashboard.serviceConfig.ExecStart)
+        && !(lib.hasInfix "/var/lib/codex-usage-dashboard/history-adjustments.json" dashboard.serviceConfig.ExecStart);
       message = "the dashboard command-line contract changed";
+    }
+    {
+      assertion =
+        cfg.services.codexUsageDashboard.activitySocket == "/run/codex-usage-dashboard/activity.sock"
+        && cfg.services.codexUsageDashboard.activityLease == "30m"
+        && cfg.services.codexUsageDashboard.expectedAnchors == expectedAnchors;
+      message = "the activity socket, lease, or expected-anchor options changed";
+    }
+    {
+      assertion =
+        requirements.mode == "0444"
+        && lib.hasInfix "[features]\nhooks = true" requirements.text
+        && lib.hasInfix "managed_dir = \"${dashboardPackagePath}/bin\"" requirements.text
+        &&
+          builtins.all
+            (
+              event:
+              lib.hasInfix "[[hooks.${event}]]" requirements.text
+              && lib.hasInfix "[[hooks.${event}.hooks]]" requirements.text
+            )
+            [
+              "SessionStart"
+              "UserPromptSubmit"
+              "PreToolUse"
+              "PostToolUse"
+              "Stop"
+              "SubagentStop"
+              "SessionEnd"
+            ]
+        && lib.hasInfix "command = \"${dashboardPackagePath}/bin/codex-usage-dashboard hook-report --socket /run/codex-usage-dashboard/activity.sock\"" requirements.text
+        && lib.hasInfix "timeout = 2" requirements.text
+        && !(lib.hasInfix "allow_managed_hooks_only" requirements.text);
+      message = "the system-managed Codex hook requirements changed";
     }
     {
       assertion = builtins.all (
@@ -146,6 +223,10 @@ let
         lib.getVersion cfg.services.codexUsageDashboard.codexPackage
         == cfg.services.codexUsageDashboard.expectedCodexVersion;
       message = "the Codex app-server package is not the compatibility-tested version";
+    }
+    {
+      assertion = builtins.elem cfg.services.codexUsageDashboard.codexPackage cfg.environment.systemPackages;
+      message = "the pinned Codex CLI must be installed system-wide";
     }
     {
       assertion = cfg.services.tailscale.enable;

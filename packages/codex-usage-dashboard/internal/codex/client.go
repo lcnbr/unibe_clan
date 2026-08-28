@@ -8,10 +8,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
+	"unicode"
 )
 
-const defaultMaxLineBytes = 1 << 20
+const (
+	defaultMaxLineBytes          = 1 << 20
+	maxLoadedThreadMetadataReads = 1024
+	maxLoadedThreadPageSize      = 64
+)
 
 var (
 	// ErrClosed means that the app-server transport is no longer available.
@@ -54,11 +60,11 @@ type Client struct {
 
 	maxLine int
 
-	writeMu sync.Mutex
-	mu      sync.Mutex
-	nextID  int64
-	pending map[int64]chan rpcResponse
-	readErr error
+	writeGate chan struct{}
+	mu        sync.Mutex
+	nextID    int64
+	pending   map[int64]chan rpcResponse
+	readErr   error
 
 	done          chan struct{}
 	notifications chan string
@@ -82,7 +88,9 @@ func newClient(reader io.Reader, writer io.Writer, closeFn func() error, maxLine
 		pending:       make(map[int64]chan rpcResponse),
 		done:          make(chan struct{}),
 		notifications: make(chan string, 1),
+		writeGate:     make(chan struct{}, 1),
 	}
+	c.writeGate <- struct{}{}
 	go c.readLoop()
 	return c
 }
@@ -103,7 +111,7 @@ func (c *Client) Initialize(ctx context.Context, name, title, version string) er
 	if err := c.call(ctx, "initialize", params, &result); err != nil {
 		return err
 	}
-	return c.notify("initialized", struct{}{})
+	return c.notify(ctx, "initialized", struct{}{})
 }
 
 // Account reads non-secret account identity and plan information.
@@ -156,6 +164,210 @@ func (c *Client) RateLimits(ctx context.Context) (RateLimitsResponse, error) {
 	}, nil
 }
 
+// AccountUsage reads the optional all-Codex lifetime token total. A null
+// value is a successful response and remains distinguishable from an RPC or
+// protocol failure.
+func (c *Client) AccountUsage(ctx context.Context) (AccountUsageResponse, error) {
+	var wire struct {
+		Summary json.RawMessage `json:"summary"`
+	}
+	if err := c.call(ctx, "account/usage/read", nil, &wire); err != nil {
+		return AccountUsageResponse{}, err
+	}
+	if len(wire.Summary) == 0 || bytes.Equal(bytes.TrimSpace(wire.Summary), []byte("null")) {
+		return AccountUsageResponse{}, ErrProtocol
+	}
+	var summary struct {
+		LifetimeTokens *int64 `json:"lifetimeTokens"`
+	}
+	if err := json.Unmarshal(wire.Summary, &summary); err != nil {
+		return AccountUsageResponse{}, ErrProtocol
+	}
+	return AccountUsageResponse{LifetimeTokens: summary.LifetimeTokens}, nil
+}
+
+var interactiveThreadSourceKinds = []string{"cli", "vscode", "exec", "appServer", "unknown"}
+
+// Threads returns only the metadata required to resolve hook session IDs to
+// safe task names. App Server may return substantially more data; the narrow
+// wire type makes that data unreachable after decoding. sourceKinds is always
+// explicit because an omitted filter excludes exec and appServer sessions on
+// supported Codex versions.
+func (c *Client) Threads(ctx context.Context, limit int) (ThreadListResponse, error) {
+	if limit <= 0 || limit > 64 {
+		limit = 64
+	}
+	params := struct {
+		Limit          int      `json:"limit"`
+		SortKey        string   `json:"sortKey"`
+		SortDirection  string   `json:"sortDirection"`
+		Archived       bool     `json:"archived"`
+		UseStateDBOnly bool     `json:"useStateDbOnly"`
+		SourceKinds    []string `json:"sourceKinds"`
+	}{
+		Limit:          limit,
+		SortKey:        "updated_at",
+		SortDirection:  "desc",
+		Archived:       false,
+		UseStateDBOnly: true,
+		SourceKinds:    append([]string(nil), interactiveThreadSourceKinds...),
+	}
+	var wire struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := c.call(ctx, "thread/list", params, &wire); err != nil {
+		return ThreadListResponse{}, err
+	}
+	if len(wire.Data) == 0 || bytes.Equal(bytes.TrimSpace(wire.Data), []byte("null")) {
+		return ThreadListResponse{}, ErrProtocol
+	}
+	var threads []Thread
+	if err := json.Unmarshal(wire.Data, &threads); err != nil {
+		return ThreadListResponse{}, ErrProtocol
+	}
+	return ThreadListResponse{Threads: threads}, nil
+}
+
+// LoadedThreads reads metadata for threads already loaded by this App Server.
+// It never resumes, subscribes to, or otherwise loads a thread. The number of
+// metadata reads is strictly bounded independently of the peer's loaded set;
+// limit is applied after rejecting subagents and unusable metadata so those
+// rows cannot hide an interactive session.
+func (c *Client) LoadedThreads(ctx context.Context, limit int) (ThreadListResponse, error) {
+	if limit <= 0 || limit > 64 {
+		limit = 64
+	}
+	loaded, err := c.loadedThreadIDs(ctx, maxLoadedThreadMetadataReads)
+	if err != nil {
+		return ThreadListResponse{}, err
+	}
+	threads := make([]Thread, 0, min(len(loaded.ThreadIDs), limit))
+	selectedSessions := make(map[string]bool, limit)
+	for _, threadID := range loaded.ThreadIDs {
+		thread, err := c.readThreadMetadata(ctx, threadID)
+		if err != nil {
+			return ThreadListResponse{}, err
+		}
+		if thread.ParentThreadID != nil || !thread.Source.Allowed() ||
+			!validOpaqueID(thread.SessionID) ||
+			(thread.Status.Type != "active" && thread.Status.Type != "idle") {
+			continue
+		}
+		if !selectedSessions[thread.SessionID] {
+			if len(selectedSessions) == limit {
+				continue
+			}
+			selectedSessions[thread.SessionID] = true
+		}
+		threads = append(threads, thread)
+	}
+	return ThreadListResponse{Threads: threads}, nil
+}
+
+func (c *Client) loadedThreadIDs(ctx context.Context, limit int) (LoadedThreadListResponse, error) {
+	if limit <= 0 || limit > maxLoadedThreadMetadataReads {
+		limit = maxLoadedThreadMetadataReads
+	}
+	result := make([]string, 0, limit)
+	seenIDs := make(map[string]bool, limit)
+	seenCursors := make(map[string]bool)
+	var cursor *string
+	for len(result) < limit {
+		pageLimit := min(limit-len(result), maxLoadedThreadPageSize)
+		params := struct {
+			Cursor *string `json:"cursor,omitempty"`
+			Limit  int     `json:"limit"`
+		}{Cursor: cursor, Limit: pageLimit}
+		var wire struct {
+			Data       json.RawMessage `json:"data"`
+			NextCursor *string         `json:"nextCursor"`
+		}
+		if err := c.call(ctx, "thread/loaded/list", params, &wire); err != nil {
+			return LoadedThreadListResponse{}, err
+		}
+		if len(wire.Data) == 0 || bytes.Equal(bytes.TrimSpace(wire.Data), []byte("null")) {
+			return LoadedThreadListResponse{}, ErrProtocol
+		}
+		var ids []string
+		if err := json.Unmarshal(wire.Data, &ids); err != nil || ids == nil {
+			return LoadedThreadListResponse{}, ErrProtocol
+		}
+		for _, id := range ids {
+			if !validOpaqueID(id) {
+				return LoadedThreadListResponse{}, ErrProtocol
+			}
+			if !seenIDs[id] {
+				seenIDs[id] = true
+				result = append(result, id)
+				if len(result) == limit {
+					break
+				}
+			}
+		}
+		if len(result) == limit || wire.NextCursor == nil {
+			break
+		}
+		next := *wire.NextCursor
+		if !validOpaqueCursor(next) || seenCursors[next] {
+			return LoadedThreadListResponse{}, ErrProtocol
+		}
+		seenCursors[next] = true
+		cursor = &next
+		if len(ids) == 0 {
+			return LoadedThreadListResponse{}, ErrProtocol
+		}
+	}
+	return LoadedThreadListResponse{ThreadIDs: result}, nil
+}
+
+func (c *Client) readThreadMetadata(ctx context.Context, threadID string) (Thread, error) {
+	if !validOpaqueID(threadID) {
+		return Thread{}, ErrProtocol
+	}
+	params := struct {
+		ThreadID     string `json:"threadId"`
+		IncludeTurns bool   `json:"includeTurns"`
+	}{ThreadID: threadID, IncludeTurns: false}
+	var wire struct {
+		Thread json.RawMessage `json:"thread"`
+	}
+	if err := c.call(ctx, "thread/read", params, &wire); err != nil {
+		return Thread{}, err
+	}
+	if len(wire.Thread) == 0 || bytes.Equal(bytes.TrimSpace(wire.Thread), []byte("null")) {
+		return Thread{}, ErrProtocol
+	}
+	var thread Thread
+	if err := json.Unmarshal(wire.Thread, &thread); err != nil {
+		return Thread{}, ErrProtocol
+	}
+	if thread.ID != threadID || !validOpaqueID(thread.ID) {
+		return Thread{}, ErrProtocol
+	}
+	return thread, nil
+}
+
+func validOpaqueID(value string) bool {
+	return validOpaqueText(value, 128)
+}
+
+func validOpaqueCursor(value string) bool {
+	return validOpaqueText(value, 4096)
+}
+
+func validOpaqueText(value string, maximum int) bool {
+	if value == "" || len(value) > maximum || strings.TrimSpace(value) != value {
+		return false
+	}
+	for _, char := range value {
+		if unicode.IsControl(char) || unicode.Is(unicode.Cf, char) ||
+			unicode.Is(unicode.Cs, char) || unicode.Is(unicode.Co, char) {
+			return false
+		}
+	}
+	return true
+}
+
 // Notifications yields coalesced account change notifications. Callers must
 // always refetch full state rather than treating notifications as snapshots.
 func (c *Client) Notifications() <-chan string { return c.notifications }
@@ -186,7 +398,7 @@ func (c *Client) call(ctx context.Context, method string, params any, out any) e
 		ID     int64  `json:"id"`
 		Params any    `json:"params,omitempty"`
 	}{Method: method, ID: id, Params: params}
-	if err := c.writeJSON(request); err != nil {
+	if err := c.writeJSON(ctx, request); err != nil {
 		c.removePending(id)
 		return err
 	}
@@ -218,14 +430,14 @@ func (c *Client) call(ctx context.Context, method string, params any, out any) e
 	}
 }
 
-func (c *Client) notify(method string, params any) error {
-	return c.writeJSON(struct {
+func (c *Client) notify(ctx context.Context, method string, params any) error {
+	return c.writeJSON(ctx, struct {
 		Method string `json:"method"`
 		Params any    `json:"params,omitempty"`
 	}{Method: method, Params: params})
 }
 
-func (c *Client) writeJSON(value any) error {
+func (c *Client) writeJSON(ctx context.Context, value any) error {
 	payload, err := json.Marshal(value)
 	if err != nil {
 		return ErrProtocol
@@ -235,18 +447,53 @@ func (c *Client) writeJSON(value any) error {
 	}
 	payload = append(payload, '\n')
 
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
 	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.done:
+		return ErrClosed
+	case <-c.writeGate:
+	}
+	defer func() { c.writeGate <- struct{}{} }()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
 	case <-c.done:
 		return ErrClosed
 	default:
 	}
-	if err := writeFull(c.writer, payload); err != nil {
+	if err := writeFullContext(ctx, c.writer, payload); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		if errors.Is(err, ErrProtocol) {
+			return ErrProtocol
+		}
 		c.fail(ErrClosed)
 		return ErrClosed
 	}
 	return nil
+}
+
+type contextWriter interface {
+	WriteContext(context.Context, []byte) (int, error)
+}
+
+func writeFullContext(ctx context.Context, writer io.Writer, payload []byte) error {
+	if writerWithContext, ok := writer.(contextWriter); ok {
+		written, err := writerWithContext.WriteContext(ctx, payload)
+		if err != nil {
+			return err
+		}
+		if written != len(payload) {
+			return io.ErrShortWrite
+		}
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return writeFull(writer, payload)
 }
 
 func writeFull(writer io.Writer, payload []byte) error {
@@ -338,7 +585,9 @@ func (c *Client) writeServerError(id json.RawMessage) error {
 		}
 		safeID = text
 	}
-	return c.writeJSON(struct {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultHandshakeTimeout)
+	defer cancel()
+	return c.writeJSON(ctx, struct {
 		ID    any `json:"id"`
 		Error struct {
 			Code    int    `json:"code"`

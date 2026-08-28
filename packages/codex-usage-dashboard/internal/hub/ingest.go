@@ -47,16 +47,24 @@ func (s *IngestServer) Serve(ctx context.Context) error {
 	if s.MaxConnections <= 0 {
 		s.MaxConnections = 8
 	}
-	if err := removeStaleSocket(s.SocketPath); err != nil {
+	if err := prepareSocketPath(s.SocketPath); err != nil {
 		return err
 	}
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: s.SocketPath, Net: "unix"})
 	if err != nil {
 		return fmt.Errorf("listen on ingest socket: %w", err)
 	}
+	// Go's default UnixListener cleanup removes whatever currently occupies
+	// the path. Disable it and unlink only the inode this server created.
+	listener.SetUnlinkOnClose(false)
+	ownedSocket, err := os.Lstat(s.SocketPath)
+	if err != nil || ownedSocket.Mode()&os.ModeSocket == 0 {
+		_ = listener.Close()
+		return errors.New("cannot establish ingest socket ownership")
+	}
 	defer func() {
 		_ = listener.Close()
-		_ = os.Remove(s.SocketPath)
+		_ = removeOwnedSocket(s.SocketPath, ownedSocket)
 	}()
 	if err := os.Chmod(s.SocketPath, 0o660); err != nil {
 		return fmt.Errorf("set ingest socket permissions: %w", err)
@@ -145,7 +153,7 @@ func writeIngestReply(conn *net.UnixConn, reply ingestReply) {
 	_ = json.NewEncoder(conn).Encode(reply)
 }
 
-func removeStaleSocket(path string) error {
+func prepareSocketPath(path string) error {
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -156,10 +164,42 @@ func removeStaleSocket(path string) error {
 	if info.Mode()&os.ModeSocket == 0 {
 		return fmt.Errorf("refusing to replace non-socket path %s", path)
 	}
+	conn, dialErr := net.DialTimeout("unix", path, 200*time.Millisecond)
+	if dialErr == nil {
+		_ = conn.Close()
+		return errors.New("ingest socket is already active")
+	}
+	if errors.Is(dialErr, os.ErrNotExist) {
+		return nil
+	}
+	if !errors.Is(dialErr, syscall.ECONNREFUSED) {
+		return errors.New("cannot safely determine whether ingest socket is stale")
+	}
+	current, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil || !os.SameFile(info, current) {
+		return errors.New("ingest socket changed while checking staleness")
+	}
 	if err := os.Remove(path); err != nil {
 		return fmt.Errorf("remove stale ingest socket: %w", err)
 	}
 	return nil
+}
+
+func removeOwnedSocket(path string, owned os.FileInfo) error {
+	current, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if current.Mode()&os.ModeSocket == 0 || !os.SameFile(owned, current) {
+		return nil
+	}
+	return os.Remove(path)
 }
 
 func peerUID(conn *net.UnixConn) (uint32, error) {

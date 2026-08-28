@@ -176,3 +176,90 @@ func TestSanitizeResetCreditsPreservesZeroAndRejectsInvalidCounts(t *testing.T) 
 		})
 	}
 }
+
+func TestSanitizeLifetimeAndRecentThreads(t *testing.T) {
+	validLifetime := int64(42)
+	if got := sanitizeLifetimeTokens(codex.AccountUsageResponse{LifetimeTokens: &validLifetime}); got == nil || *got != validLifetime {
+		t.Fatalf("valid lifetime = %v", got)
+	}
+	invalidLifetime := int64(-1)
+	if got := sanitizeLifetimeTokens(codex.AccountUsageResponse{LifetimeTokens: &invalidLifetime}); got != nil {
+		t.Fatalf("negative lifetime retained: %d", *got)
+	}
+	name := " Safe\n name "
+	controlID := "bad\nid"
+	threads := sanitizeRecentThreads(codex.ThreadListResponse{Threads: []codex.Thread{
+		{ID: "private-thread-1", SessionID: "session-1", Source: codex.SessionSourceCLI, Name: &name, CreatedAt: 10, UpdatedAt: 20},
+		{ID: "private-thread-2", SessionID: "session-1", Source: codex.SessionSourceExec, Name: stringPointer("duplicate")},
+		{ID: "private-bad", SessionID: controlID, Source: codex.SessionSourceCLI, Name: stringPointer("unsafe")},
+		{ID: "private-backwards", SessionID: "backwards", Source: codex.SessionSourceCLI, Name: stringPointer("bad time"), CreatedAt: 20, UpdatedAt: 10},
+	}})
+	if len(threads) != 1 || threads[0].ThreadID != "session-1" || threads[0].TaskName != "Safe name" ||
+		threads[0].CreatedAt != 10 || threads[0].UpdatedAt != 20 {
+		t.Fatalf("sanitized recent threads = %#v", threads)
+	}
+}
+
+func TestSanitizeRuntimeThreadsDeduplicatesSessionTree(t *testing.T) {
+	oldName := "Old title"
+	newName := "New title"
+	threads := sanitizeRuntimeThreads(codex.ThreadListResponse{Threads: []codex.Thread{
+		{ID: "private-a", SessionID: "shared-session", Source: codex.SessionSourceCLI,
+			Name: &oldName, Status: codex.ThreadStatus{Type: "idle"}, CreatedAt: 0, UpdatedAt: 20},
+		{ID: "private-b", SessionID: "shared-session", Source: codex.SessionSourceExec,
+			Name: &newName, Status: codex.ThreadStatus{Type: "active"}, CreatedAt: 10, UpdatedAt: 30},
+		{ID: "private-c", SessionID: "", Source: codex.SessionSourceAppServer,
+			Status: codex.ThreadStatus{Type: "active"}, CreatedAt: 1, UpdatedAt: 2},
+		{ID: "private-d", SessionID: "excluded-custom", Source: "",
+			Status: codex.ThreadStatus{Type: "active"}, CreatedAt: 1, UpdatedAt: 2},
+	}})
+	if len(threads) != 1 {
+		t.Fatalf("runtime threads = %#v", threads)
+	}
+	thread := threads[0]
+	if thread.ThreadID != "shared-session" || thread.TaskName != "New title" ||
+		thread.CreatedAt != 10 || thread.UpdatedAt != 30 || !thread.Running {
+		t.Fatalf("deduplicated runtime thread = %#v", thread)
+	}
+}
+
+func TestSanitizeRuntimeThreadsAcceptsEveryExplicitInteractiveSource(t *testing.T) {
+	sources := []codex.SessionSource{
+		codex.SessionSourceCLI, codex.SessionSourceVSCode, codex.SessionSourceExec,
+		codex.SessionSourceAppServer, codex.SessionSourceUnknown,
+	}
+	input := make([]codex.Thread, 0, len(sources))
+	for index, source := range sources {
+		input = append(input, codex.Thread{
+			ID: fmt.Sprintf("private-%d", index), SessionID: fmt.Sprintf("session-%d", index),
+			Source: source, Status: codex.ThreadStatus{Type: "idle"},
+			CreatedAt: int64(index + 1), UpdatedAt: int64(index + 1),
+		})
+	}
+	if got := sanitizeRuntimeThreads(codex.ThreadListResponse{Threads: input}); len(got) != len(sources) {
+		t.Fatalf("accepted runtime sources = %#v", got)
+	}
+}
+
+func TestSanitizeRuntimeThreadsKeepsOnlyTopLevelActiveAndIdle(t *testing.T) {
+	activeName := " Running\n task "
+	idleName := "Idle task"
+	parent := "parent"
+	threads := sanitizeRuntimeThreads(codex.ThreadListResponse{Threads: []codex.Thread{
+		{ID: "private-active", SessionID: "active", Source: codex.SessionSourceCLI, Name: &activeName, Status: codex.ThreadStatus{Type: "active"}, CreatedAt: 10, UpdatedAt: 20},
+		{ID: "private-idle", SessionID: "idle", Source: codex.SessionSourceVSCode, Name: &idleName, Status: codex.ThreadStatus{Type: "idle"}, CreatedAt: 30, UpdatedAt: 40},
+		{ID: "private-not-loaded", SessionID: "not-loaded", Source: codex.SessionSourceExec, Status: codex.ThreadStatus{Type: "notLoaded"}},
+		{ID: "private-failed", SessionID: "failed", Source: codex.SessionSourceAppServer, Status: codex.ThreadStatus{Type: "systemError"}},
+		{ID: "private-subagent", SessionID: "active", Source: codex.SessionSourceCLI, ParentThreadID: &parent, Status: codex.ThreadStatus{Type: "active"}},
+		{ID: "private-active-duplicate", SessionID: "active", Source: codex.SessionSourceUnknown, Status: codex.ThreadStatus{Type: "active"}},
+	}})
+	if len(threads) != 2 {
+		t.Fatalf("runtime threads = %#v", threads)
+	}
+	if threads[0].ThreadID != "active" || threads[0].TaskName != "Running task" || !threads[0].Running {
+		t.Fatalf("active thread = %#v", threads[0])
+	}
+	if threads[1].ThreadID != "idle" || threads[1].TaskName != "Idle task" || threads[1].Running {
+		t.Fatalf("idle thread = %#v", threads[1])
+	}
+}

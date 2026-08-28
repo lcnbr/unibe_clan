@@ -172,13 +172,14 @@ func TestSSEStartsWithSnapshotAndReconnects(t *testing.T) {
 
 	first := readInitial()
 	second := readInitial()
-	if len(first.Accounts) != 1 || len(second.Accounts) != 1 {
+	if len(first.Accounts) != 0 || len(second.Accounts) != 0 ||
+		len(first.UnassignedUsers) != 1 || len(second.UnassignedUsers) != 1 {
 		t.Fatal("reconnect did not receive an immediate full state")
 	}
 }
 
 func TestHistoryEndpointIsReadOnlyAndOmitsAccountIdentity(t *testing.T) {
-	retained, err := usagehistory.Open("", []string{"codex"}, 14*24*time.Hour)
+	retained, err := usagehistory.Open("", 14*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,12 +196,11 @@ func TestHistoryEndpointIsReadOnlyAndOmitsAccountIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.StatusCode != http.StatusOK || !strings.Contains(string(payload), `"schemaVersion":2`) ||
-		!strings.Contains(string(payload), `"username":"codex"`) ||
-		!strings.Contains(string(payload), `"adjustments":[]`) {
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(payload), `"schemaVersion":4`) ||
+		!strings.Contains(string(payload), `"accounts":[]`) {
 		t.Fatalf("unexpected history response: status=%d body=%q", response.StatusCode, payload)
 	}
-	for _, forbidden := range []string{"email", "planType", "credits", "resetCreditsAvailable", "Spark", "coreRevisionBefore"} {
+	for _, forbidden := range []string{"username", "email", "planType", "credits", "resetCreditsAvailable", "Spark", "coreRevisionBefore"} {
 		if strings.Contains(string(payload), forbidden) {
 			t.Fatalf("history response contains %q", forbidden)
 		}

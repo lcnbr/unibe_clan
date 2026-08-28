@@ -118,3 +118,61 @@ func TestIngestRejectsOversizedAndUntrustedUID(t *testing.T) {
 		t.Fatalf("untrusted UID response: %#v", reply)
 	}
 }
+
+func TestSecondIngestServerCannotUnlinkLiveSocket(t *testing.T) {
+	uid := uint32(os.Getuid())
+	state, _ := New([]Identity{{Username: "codex", UID: uid}}, time.Minute)
+	socket, stop := startTestIngest(t, state, 64<<10)
+	defer stop()
+
+	duplicate := &IngestServer{Hub: state, SocketPath: socket}
+	if err := duplicate.Serve(context.Background()); err == nil || !strings.Contains(err.Error(), "already active") {
+		t.Fatalf("duplicate server error = %v", err)
+	}
+	valid, _ := json.Marshal(testSnapshot("codex", time.Now().UTC(), 17))
+	if reply := sendPayload(t, socket, append(valid, '\n')); reply["ok"] != true {
+		t.Fatalf("duplicate startup damaged live server: %#v", reply)
+	}
+}
+
+func TestOwnedSocketCleanupPreservesReplacement(t *testing.T) {
+	directory := t.TempDir()
+	originalPath := filepath.Join(directory, "ingest.sock")
+	original, err := net.ListenUnix("unix", &net.UnixAddr{Name: originalPath, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	original.SetUnlinkOnClose(false)
+	owned, err := os.Lstat(originalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := original.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	replacementPath := filepath.Join(directory, "replacement.sock")
+	replacement, err := net.ListenUnix("unix", &net.UnixAddr{Name: replacementPath, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement.SetUnlinkOnClose(false)
+	defer func() {
+		_ = replacement.Close()
+		_ = os.Remove(originalPath)
+	}()
+	if err := os.Remove(originalPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacementPath, originalPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeOwnedSocket(originalPath, owned); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := net.DialTimeout("unix", originalPath, time.Second)
+	if err != nil {
+		t.Fatalf("owned cleanup removed replacement socket: %v", err)
+	}
+	_ = conn.Close()
+}

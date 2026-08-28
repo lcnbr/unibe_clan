@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -22,10 +23,16 @@ type fakeAppServer struct {
 	mu            sync.Mutex
 	account       codex.AccountResponse
 	limits        codex.RateLimitsResponse
+	usage         codex.AccountUsageResponse
+	threads       codex.ThreadListResponse
 	accountErr    error
 	limitsErr     error
+	usageErr      error
+	threadsErr    error
 	accountReads  int
 	limitReads    int
+	usageReads    int
+	threadReads   int
 	notifications chan string
 	done          chan struct{}
 	err           error
@@ -60,6 +67,20 @@ func (f *fakeAppServer) RateLimits(context.Context) (codex.RateLimitsResponse, e
 	return f.limits, f.limitsErr
 }
 
+func (f *fakeAppServer) AccountUsage(context.Context) (codex.AccountUsageResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.usageReads++
+	return f.usage, f.usageErr
+}
+
+func (f *fakeAppServer) Threads(context.Context, int) (codex.ThreadListResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.threadReads++
+	return f.threads, f.threadsErr
+}
+
 func (f *fakeAppServer) Notifications() <-chan string { return f.notifications }
 func (f *fakeAppServer) Done() <-chan struct{}        { return f.done }
 func (f *fakeAppServer) Err() error                   { return f.err }
@@ -91,7 +112,102 @@ func testCollector(t *testing.T) *Collector {
 	if err != nil {
 		t.Fatal(err)
 	}
+	c.stat = func(string) (authMetadata, error) {
+		return authMetadata{Known: true, Exists: true}, nil
+	}
+	c.codexVersion = "0.149.0-test"
+	c.detectVersion = func(context.Context, string) (string, error) {
+		return "0.149.0-test", nil
+	}
 	return c
+}
+
+func TestParseCodexVersionOutputAcceptsOnlyVersionToken(t *testing.T) {
+	for input, want := range map[string]string{
+		"codex-cli 0.149.0\n":       "0.149.0",
+		"CODEX-CLI 0.150.0-alpha.1": "0.150.0-alpha.1",
+		"codex 0.151.0+build_2":     "0.151.0+build_2",
+	} {
+		got, err := parseCodexVersionOutput([]byte(input))
+		if err != nil || got != want {
+			t.Fatalf("parseCodexVersionOutput(%q) = (%q, %v), want %q", input, got, err, want)
+		}
+	}
+	for _, input := range []string{
+		"", "other-product 0.149.0", "codex-cli", "codex-cli 0.149.0 extra",
+		"codex-cli ../../private", "codex-cli 0.149.0\nsecret",
+		"codex-cli " + strings.Repeat("1", model.MaxCodexVersionBytes+1),
+	} {
+		if got, err := parseCodexVersionOutput([]byte(input)); err == nil || got != "" {
+			t.Fatalf("unsafe output %q parsed as (%q, %v)", input, got, err)
+		}
+	}
+}
+
+func TestVersionProbeOutputCaptureIsStrictlyBounded(t *testing.T) {
+	output := boundedVersionOutput{limit: 4}
+	input := []byte("0123456789")
+	written, err := output.Write(input)
+	if err != nil || written != len(input) {
+		t.Fatalf("bounded write = (%d, %v), want (%d, nil)", written, err, len(input))
+	}
+	if got := string(output.bytes); got != "0123" || !output.exceeded {
+		t.Fatalf("bounded capture = bytes:%q exceeded:%v", got, output.exceeded)
+	}
+	if written, err := output.Write([]byte("more")); err != nil || written != 4 || len(output.bytes) != 4 {
+		t.Fatalf("continued drain = written:%d error:%v retained:%q", written, err, output.bytes)
+	}
+}
+
+func TestVersionProbeUsesConfiguredCodexPathOnce(t *testing.T) {
+	c := testCollector(t)
+	c.cfg.CodexPath = "/nix/store/test-codex/bin/codex"
+	var calls int
+	c.detectVersion = func(_ context.Context, path string) (string, error) {
+		calls++
+		if path != c.cfg.CodexPath {
+			t.Fatalf("version path = %q, want configured path %q", path, c.cfg.CodexPath)
+		}
+		return "0.151.0", nil
+	}
+	c.probeCodexVersion(context.Background())
+	if calls != 1 || c.codexVersion != "0.151.0" {
+		t.Fatalf("version probe = calls:%d version:%q", calls, c.codexVersion)
+	}
+
+	c.detectVersion = func(context.Context, string) (string, error) {
+		return "", errors.New("temporary local failure")
+	}
+	c.probeCodexVersion(context.Background())
+	if c.codexVersion != "0.151.0" {
+		t.Fatalf("failed retry erased known version: %q", c.codexVersion)
+	}
+}
+
+func TestEveryCollectorStateCarriesKnownCodexVersion(t *testing.T) {
+	c := testCollector(t)
+	fake := newFakeAppServer()
+	published := make([]model.Snapshot, 0, 3)
+	c.publish = func(_ context.Context, snapshot model.Snapshot) error {
+		published = append(published, snapshot)
+		return nil
+	}
+	if ok, category := c.refresh(context.Background(), fake); !ok || category != "" {
+		t.Fatalf("healthy refresh = (%v, %q)", ok, category)
+	}
+	c.publishUnavailable(context.Background(), model.ErrorCodexUnavailable)
+	c.publishSignedOut(context.Background())
+	if len(published) != 3 {
+		t.Fatalf("published %d snapshots, want 3", len(published))
+	}
+	for _, snapshot := range published {
+		if snapshot.CodexVersion != c.codexVersion {
+			t.Fatalf("%s snapshot version = %q, want %q", snapshot.State, snapshot.CodexVersion, c.codexVersion)
+		}
+		if err := snapshot.Validate(); err != nil {
+			t.Fatalf("%s snapshot validation: %v", snapshot.State, err)
+		}
+	}
 }
 
 func TestNextBackoffIsExponentialAndBounded(t *testing.T) {
@@ -198,6 +314,176 @@ func TestRefreshMissingPlanIsProtocolFailure(t *testing.T) {
 	}
 }
 
+func TestOptionalUsageAndThreadFailuresDoNotBlankQuota(t *testing.T) {
+	c := testCollector(t)
+	c.runtimeThreads = func(context.Context, string) (codex.ThreadListResponse, error) {
+		return codex.ThreadListResponse{}, errors.New("optional control daemon unavailable")
+	}
+	fake := newFakeAppServer()
+	fake.usageErr = errors.New("optional usage unavailable")
+	fake.threadsErr = errors.New("optional threads unavailable")
+	var published model.Snapshot
+	c.publish = func(_ context.Context, snapshot model.Snapshot) error {
+		published = snapshot
+		return nil
+	}
+	ok, category := c.refresh(context.Background(), fake)
+	if !ok || category != "" {
+		t.Fatalf("refresh = (%v, %q)", ok, category)
+	}
+	if published.State != model.StateOK || len(published.Limits) != 1 ||
+		published.LifetimeTokens != nil || published.LifetimeTokensRead ||
+		published.RecentThreadsRead || len(published.RecentThreads) != 0 ||
+		published.RuntimeThreadsRead || len(published.RuntimeThreads) != 0 {
+		t.Fatalf("optional failure changed quota snapshot: %#v", published)
+	}
+}
+
+func TestControlAccountMatchIsTrimmedCaseInsensitiveAndChatGPTOnly(t *testing.T) {
+	email := "  Person+Alias@GMAIL.COM  "
+	if !sameChatGPTAccount(codex.AccountResponse{Account: &codex.Account{
+		Type: "chatgpt", Email: &email,
+	}}, "person+alias@gmail.com") {
+		t.Fatal("equivalent ChatGPT emails did not match")
+	}
+	other := "other@gmail.com"
+	for _, response := range []codex.AccountResponse{
+		{},
+		{Account: &codex.Account{Type: "chatgpt"}},
+		{Account: &codex.Account{Type: "apiKey", Email: &email}},
+		{Account: &codex.Account{Type: "chatgpt", Email: &other}},
+	} {
+		if sameChatGPTAccount(response, "person+alias@gmail.com") {
+			t.Fatalf("mismatched control account accepted: %#v", response.Account)
+		}
+	}
+}
+
+func TestAccountSwitchClearsOptionalRuntimeWhenControlIdentityLags(t *testing.T) {
+	c := testCollector(t)
+	fake := newFakeAppServer()
+	controlEmail := "person@example.com"
+	c.runtimeThreads = func(_ context.Context, expectedEmail string) (codex.ThreadListResponse, error) {
+		controlAccount := codex.AccountResponse{Account: &codex.Account{
+			Type: "chatgpt", Email: &controlEmail,
+		}}
+		if !sameChatGPTAccount(controlAccount, expectedEmail) {
+			return codex.ThreadListResponse{}, codex.ErrProtocol
+		}
+		return codex.ThreadListResponse{Threads: []codex.Thread{{
+			ID: "private-runtime-id", SessionID: "runtime-session", Source: codex.SessionSourceCLI,
+			Status: codex.ThreadStatus{Type: "active"}, CreatedAt: 10, UpdatedAt: 20,
+		}}}, nil
+	}
+	var published model.Snapshot
+	c.publish = func(_ context.Context, snapshot model.Snapshot) error {
+		published = snapshot
+		return nil
+	}
+	if ok, category := c.refresh(context.Background(), fake); !ok || category != "" {
+		t.Fatalf("initial refresh = (%v, %q)", ok, category)
+	}
+	if !published.RuntimeThreadsRead || len(published.RuntimeThreads) != 1 {
+		t.Fatalf("matched runtime observation = read:%v threads:%#v", published.RuntimeThreadsRead, published.RuntimeThreads)
+	}
+
+	switchedEmail := "second@example.com"
+	fake.mu.Lock()
+	fake.account.Account.Email = &switchedEmail
+	fake.mu.Unlock()
+	if ok, category := c.refresh(context.Background(), fake); !ok || category != "" {
+		t.Fatalf("switched refresh = (%v, %q)", ok, category)
+	}
+	if published.RuntimeThreadsRead || len(published.RuntimeThreads) != 0 {
+		t.Fatalf("mismatched control identity retained runtime: read:%v threads:%#v",
+			published.RuntimeThreadsRead, published.RuntimeThreads)
+	}
+}
+
+func TestRefreshPublishesTopLevelRuntimeStatusAndClearsItOnFailure(t *testing.T) {
+	c := testCollector(t)
+	fake := newFakeAppServer()
+	activeName := " Active\n dashboard "
+	idleName := "Idle dashboard"
+	parent := "parent-thread"
+	c.runtimeThreads = func(context.Context, string) (codex.ThreadListResponse, error) {
+		return codex.ThreadListResponse{Threads: []codex.Thread{
+			{ID: "private-active", SessionID: "active", Source: codex.SessionSourceCLI, Name: &activeName, Status: codex.ThreadStatus{Type: "active"}, CreatedAt: 10, UpdatedAt: 20},
+			{ID: "private-idle", SessionID: "idle", Source: codex.SessionSourceVSCode, Name: &idleName, Status: codex.ThreadStatus{Type: "idle"}, CreatedAt: 30, UpdatedAt: 40},
+			{ID: "private-old", SessionID: "old", Source: codex.SessionSourceExec, Status: codex.ThreadStatus{Type: "notLoaded"}},
+			{ID: "private-subagent", SessionID: "active", Source: codex.SessionSourceCLI, ParentThreadID: &parent, Status: codex.ThreadStatus{Type: "active"}},
+		}}, nil
+	}
+	var published model.Snapshot
+	c.publish = func(_ context.Context, snapshot model.Snapshot) error {
+		published = snapshot
+		return nil
+	}
+	if ok, category := c.refresh(context.Background(), fake); !ok || category != "" {
+		t.Fatalf("refresh = (%v, %q)", ok, category)
+	}
+	if !published.RuntimeThreadsRead || len(published.RuntimeThreads) != 2 ||
+		published.RuntimeThreads[0].TaskName != "Active dashboard" ||
+		!published.RuntimeThreads[0].Running || published.RuntimeThreads[1].Running {
+		t.Fatalf("runtime observation = %#v", published.RuntimeThreads)
+	}
+
+	// A transient read failure produces an explicitly unavailable, empty
+	// observation. The Hub replaces its previous set on every OK snapshot so
+	// this cannot leave a false running chat behind.
+	c.runtimeThreads = func(context.Context, string) (codex.ThreadListResponse, error) {
+		return codex.ThreadListResponse{}, codex.ErrClosed
+	}
+	if ok, category := c.refresh(context.Background(), fake); !ok || category != "" {
+		t.Fatalf("refresh after control failure = (%v, %q)", ok, category)
+	}
+	if published.RuntimeThreadsRead || len(published.RuntimeThreads) != 0 {
+		t.Fatalf("failed runtime observation retained activity: %#v", published.RuntimeThreads)
+	}
+}
+
+func TestMissingControlSocketIsConfirmedEmptyRuntimeObservation(t *testing.T) {
+	c := testCollector(t)
+	fake := newFakeAppServer()
+	var published model.Snapshot
+	c.publish = func(_ context.Context, snapshot model.Snapshot) error {
+		published = snapshot
+		return nil
+	}
+	if ok, category := c.refresh(context.Background(), fake); !ok || category != "" {
+		t.Fatalf("refresh = (%v, %q)", ok, category)
+	}
+	if !published.RuntimeThreadsRead || len(published.RuntimeThreads) != 0 {
+		t.Fatalf("missing control socket = read:%v threads:%#v", published.RuntimeThreadsRead, published.RuntimeThreads)
+	}
+}
+
+func TestRefreshPublishesAllowlistedLifetimeAndThreadMetadata(t *testing.T) {
+	c := testCollector(t)
+	fake := newFakeAppServer()
+	lifetime := int64(987654)
+	taskName := "  Fix\n dashboard\t now  "
+	fake.usage = codex.AccountUsageResponse{LifetimeTokens: &lifetime}
+	fake.threads = codex.ThreadListResponse{Threads: []codex.Thread{{
+		ID: "private-thread-id", SessionID: "session-safe-id", Source: codex.SessionSourceAppServer,
+		Name: &taskName, CreatedAt: 10, UpdatedAt: 20,
+	}}}
+	var published model.Snapshot
+	c.publish = func(_ context.Context, snapshot model.Snapshot) error {
+		published = snapshot
+		return nil
+	}
+	if ok, category := c.refresh(context.Background(), fake); !ok || category != "" {
+		t.Fatalf("refresh = (%v, %q)", ok, category)
+	}
+	if !published.LifetimeTokensRead || published.LifetimeTokens == nil ||
+		*published.LifetimeTokens != lifetime || !published.RecentThreadsRead ||
+		len(published.RecentThreads) != 1 || published.RecentThreads[0].ThreadID != "session-safe-id" ||
+		published.RecentThreads[0].TaskName != "Fix dashboard now" {
+		t.Fatalf("optional allowlist snapshot: %#v", published)
+	}
+}
+
 func TestAuthMetadataChangeRecyclesChild(t *testing.T) {
 	authPath := filepath.Join(t.TempDir(), "auth.json")
 	c, err := New(Config{
@@ -208,6 +494,9 @@ func TestAuthMetadataChangeRecyclesChild(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	c.detectVersion = func(context.Context, string) (string, error) {
+		return "0.149.0-test", nil
 	}
 	var starts atomic.Int32
 	c.start = func(context.Context) (appServer, error) {
@@ -229,21 +518,68 @@ func TestAuthMetadataChangeRecyclesChild(t *testing.T) {
 	select {
 	case <-firstPublish:
 	case <-time.After(time.Second):
-		t.Fatal("initial snapshot was not published")
+		t.Fatal("initial signed-out snapshot was not published")
+	}
+	if starts.Load() != 0 {
+		t.Fatalf("collector started %d app servers before auth existed", starts.Load())
 	}
 	if err := os.WriteFile(authPath, []byte("test-only"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(time.Second)
-	for starts.Load() < 2 && time.Now().Before(deadline) {
+	for starts.Load() < 1 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if starts.Load() < 2 {
-		t.Fatalf("collector starts = %d, want at least 2", starts.Load())
+	if starts.Load() < 1 {
+		t.Fatalf("collector starts = %d, want at least 1 after auth appeared", starts.Load())
+	}
+}
+
+func TestSignedOutPublishFailureIsRetriedWithoutStartingAppServer(t *testing.T) {
+	c := testCollector(t)
+	c.cfg.StatInterval = 5 * time.Millisecond
+	c.stat = func(string) (authMetadata, error) {
+		return authMetadata{Known: true, Exists: false}, nil
+	}
+	var starts atomic.Int32
+	c.start = func(context.Context) (appServer, error) {
+		starts.Add(1)
+		return newFakeAppServer(), nil
+	}
+	var attempts atomic.Int32
+	published := make(chan model.Snapshot, 1)
+	c.publish = func(_ context.Context, snapshot model.Snapshot) error {
+		if attempts.Add(1) == 1 {
+			return errors.New("dashboard socket is not ready")
+		}
+		published <- snapshot
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- c.Run(ctx) }()
+	select {
+	case snapshot := <-published:
+		if snapshot.State != model.StateSignedOut {
+			t.Fatalf("retried snapshot state = %q, want %q", snapshot.State, model.StateSignedOut)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("signed-out snapshot was not retried after the initial publish failure")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if attempts.Load() < 2 {
+		t.Fatalf("publish attempts = %d, want at least 2", attempts.Load())
+	}
+	if starts.Load() != 0 {
+		t.Fatalf("collector started %d app servers without auth", starts.Load())
 	}
 }
 

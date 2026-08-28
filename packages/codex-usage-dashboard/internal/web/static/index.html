@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <meta name="description" content="Private rolling Codex reset history and main weekly usage for this machine.">
+  <meta name="description" content="Private account-level Codex quota, reset history, user mapping, and active-turn status for this machine.">
   <title>Codex capacity</title>
   <link rel="stylesheet" href="/assets/styles.css">
 </head>
@@ -25,14 +25,14 @@
 
       <section class="dashboard-section" aria-labelledby="accounts-heading">
         <header class="section-heading">
-          <h2 id="accounts-heading">Accounts</h2>
+          <h2 id="accounts-heading">Account overview</h2>
           <div class="account-tools" aria-label="Account view controls">
             <label class="filter-toggle">
-              <input id="localunitarity-filter" type="checkbox" checked aria-controls="accounts timeline">
+              <input id="localunitarity-filter" type="checkbox" checked aria-controls="accounts user-mapping timeline">
               <span><code>localunitarity*@gmail.com</code> only</span>
             </label>
             <div class="sort-controls">
-              <button id="sort-mode" class="quiet-button" type="button" aria-controls="accounts timeline">Sort by priority</button>
+              <button id="sort-mode" class="quiet-button" type="button" aria-controls="accounts user-mapping timeline">Sort by priority</button>
               <fieldset id="priority-basis" class="priority-basis" disabled>
                 <legend class="visually-hidden">Priority ordering metric</legend>
                 <label><input type="radio" name="priority-basis" value="remaining" checked> Quota remaining</label>
@@ -51,19 +51,33 @@
         </div>
       </section>
 
+      <section class="dashboard-section" aria-labelledby="user-mapping-heading">
+        <header class="section-heading">
+          <h2 id="user-mapping-heading">User → account</h2>
+          <div class="view-meta">
+            <span id="user-mapping-count">— users</span>
+          </div>
+        </header>
+        <div id="user-mapping" class="user-mapping-wrap" role="region" aria-labelledby="user-mapping-heading" aria-busy="true" tabindex="0">
+          <div class="table-skeleton user-mapping-skeleton" aria-hidden="true"></div>
+        </div>
+      </section>
+
       <section class="dashboard-section" aria-labelledby="timeline-heading">
         <header class="section-heading">
           <h2 id="timeline-heading">Reset history</h2>
           <div class="timeline-tools">
+            <span class="timeline-legend"><span class="legend-reset-point scheduled" aria-hidden="true"></span> Scheduled reset</span>
+            <span class="timeline-legend"><span class="legend-reset-point inferred-early" aria-hidden="true"></span> Inferred early reset</span>
             <span class="timeline-legend"><span class="legend-diamond" aria-hidden="true"></span> Server adjustment</span>
             <div class="timeline-actions" aria-label="Timeline controls">
-              <button id="timeline-earlier" class="quiet-button" type="button">Earlier</button>
-              <button id="timeline-now" class="quiet-button" type="button">Now</button>
+              <button id="timeline-earlier" class="quiet-button" type="button" aria-controls="timeline">Earlier</button>
+              <button id="timeline-now" class="quiet-button" type="button" aria-controls="timeline">Now</button>
             </div>
           </div>
         </header>
 
-        <p id="timeline-caption" class="visually-hidden">Weekly reset windows. Scroll left for tracked history.</p>
+        <p id="timeline-caption" class="visually-hidden">Weekly reset windows. Solid reset points occurred on schedule. Dashed reset points are inferred from usage dropping before schedule and are not provider-confirmed. Diamonds mark server adjustments. Reset points and adjustments can be selected for details. Scroll left for tracked history.</p>
         <div id="timeline" class="timeline-scroll" role="region" aria-labelledby="timeline-heading" aria-describedby="timeline-caption" aria-busy="true" tabindex="0">
           <div class="timeline-skeleton" aria-hidden="true"></div>
         </div>

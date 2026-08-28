@@ -3,11 +3,13 @@
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAIN_WEEK_MINUTES = 10080;
 const DEFAULT_HISTORY_DAYS = 366;
-const HISTORY_SCHEMA_VERSION = 2;
+const HISTORY_SCHEMA_VERSION = 4;
 const RESET_TIMESTAMP_CHANGED = "reset_timestamp_changed";
 const USED_PERCENT_DECREASED = "used_percent_decreased";
 
 const accountsRoot = document.getElementById("accounts");
+const userMappingRoot = document.getElementById("user-mapping");
+const userMappingCount = document.getElementById("user-mapping-count");
 const timelineRoot = document.getElementById("timeline");
 const trackingCopy = document.getElementById("tracking-copy");
 const adjustmentDetail = document.getElementById("adjustment-detail");
@@ -37,6 +39,7 @@ let knownAdjustmentIDs = null;
 let localunitarityOnly = localunitarityFilter.checked;
 let sortMode = "alphabetical";
 let priorityBasis = (priorityBasisInputs.find((input) => input.checked) || {}).value || "remaining";
+const openDisclosureKeys = new Set();
 const adjustmentDetailDefault = "";
 
 function node(tag, className, text) {
@@ -161,22 +164,41 @@ function canonicalMainUsage(account) {
   return null;
 }
 
-function historyFor(username) {
+function accountEmail(account) {
+  return accountLogic.accountEmail(account);
+}
+
+function accountLabel(account) {
+  return accountEmail(account) || (account && account.accountKey) || "Unknown account";
+}
+
+function accountPlan(account) {
+  if (account && typeof account.planType === "string") {
+    return account.planType;
+  }
+  return account && account.account ? String(account.account.planType || "") : "";
+}
+
+function historyFor(accountKey) {
   if (!historyStatus || !Array.isArray(historyStatus.accounts)) {
     return null;
   }
-  return historyStatus.accounts.find((entry) => entry.username === username) || null;
+  return historyStatus.accounts.find((entry) => entry.accountKey === accountKey) || null;
 }
 
-function adjustmentsFor(username) {
-  const history = historyFor(username);
+function adjustmentsFor(accountKey) {
+  const history = historyFor(accountKey);
   return history && Array.isArray(history.adjustments) ? history.adjustments : [];
 }
 
-function adjustmentID(username, adjustment) {
+function resetPointsFor(accountKey) {
+  return accountLogic.accountResetPoints(historyFor(accountKey));
+}
+
+function adjustmentID(accountKey, adjustment) {
   const before = adjustment && adjustment.before ? adjustment.before : {};
   const after = adjustment && adjustment.after ? adjustment.after : {};
-  return [username, adjustment && adjustment.detectedAt, before.resetsAt, after.resetsAt,
+  return [accountKey, adjustment && adjustment.detectedAt, before.resetsAt, after.resetsAt,
     before.usedPercent, after.usedPercent].join(":");
 }
 
@@ -213,25 +235,44 @@ function adjustmentDescription(adjustment, compact = false) {
   return `${parts.join(". ")}. Detected ${detectedText}.`;
 }
 
-function showAdjustmentDetail(account, adjustment) {
-  adjustmentDetail.textContent = `${account.username}: ${adjustmentDescription(adjustment, true)}`;
+function showTimelineDetail(detail) {
+  adjustmentDetail.textContent = detail;
   adjustmentDetail.classList.add("is-active");
 }
 
-function resetAdjustmentDetail() {
+function resetTimelineDetail() {
   adjustmentDetail.textContent = adjustmentDetailDefault;
   adjustmentDetail.classList.remove("is-active");
 }
 
-function restoreFocusedAdjustmentDetail() {
+function restoreFocusedTimelineDetail() {
   const focused = document.activeElement;
-  if (focused && focused.classList && focused.classList.contains("adjustment-marker") &&
-      focused.dataset.adjustmentDetail) {
-    adjustmentDetail.textContent = focused.dataset.adjustmentDetail;
-    adjustmentDetail.classList.add("is-active");
+  if (focused && focused.dataset && focused.dataset.timelineDetail) {
+    showTimelineDetail(focused.dataset.timelineDetail);
     return;
   }
-  resetAdjustmentDetail();
+  resetTimelineDetail();
+}
+
+function configureTimelineDetailMarker(marker, detail, ariaLabel) {
+  marker.dataset.timelineDetail = detail;
+  marker.setAttribute("aria-label", ariaLabel);
+  marker.setAttribute("aria-controls", "adjustment-detail");
+  marker.addEventListener("mouseenter", () => showTimelineDetail(detail));
+  marker.addEventListener("mouseleave", () => {
+    if (document.activeElement !== marker) {
+      restoreFocusedTimelineDetail();
+    }
+  });
+  marker.addEventListener("focus", () => showTimelineDetail(detail));
+  marker.addEventListener("blur", resetTimelineDetail);
+  marker.addEventListener("click", () => showTimelineDetail(detail));
+  marker.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      marker.blur();
+    }
+  });
 }
 
 function isFloatingUnusedWindow(account, windowValue) {
@@ -250,7 +291,7 @@ function isFloatingUnusedWindow(account, windowValue) {
 
 function anchoredReset(account) {
   const usage = canonicalMainUsage(account);
-  const history = historyFor(account.username);
+  const history = historyFor(account.accountKey);
   if (history && history.active && (
     !usage || Number(usage.resetsAt) === Number(history.active.resetsAt)
   )) {
@@ -297,9 +338,9 @@ function priorityFacts(account) {
   const startsOnNextUse = Boolean(
     usage && !active && isFloatingUnusedWindow(account, usage),
   );
-  const plan = account && account.account ? String(account.account.planType || "").toLowerCase() : "";
+  const plan = accountPlan(account).toLowerCase();
   return {
-    activePro: Boolean(account && account.state === "ok" && plan === "pro" && active && active.resetsAt),
+    activePro: Boolean(account && account.state === "ok" && !account.stale && plan === "pro" && active && active.resetsAt),
     startsOnNextUse,
     resetCreditsAvailable: resetCreditsAvailable(account),
     remainingPercent: remainingPercent(account),
@@ -346,7 +387,7 @@ function statusPresentation(account) {
 }
 
 function usageLabel(used) {
-  return used === 0 ? "0% reported" : `≈${used}% used`;
+  return accountLogic.quotaUsageLabel(used);
 }
 
 function appendRemainingMeter(parent, remaining, used, label) {
@@ -368,12 +409,66 @@ function appendRemainingMeter(parent, remaining, used, label) {
   parent.append(meter);
 }
 
+function formattedInteger(value) {
+  return Number.isSafeInteger(value) && value >= 0
+    ? new Intl.NumberFormat().format(value)
+    : "—";
+}
+
+function consumerUsers(account) {
+  return accountLogic.consumerUsers(account);
+}
+
+function appendDisclosure(parent, summaryText, items, itemClass, disclosureKey) {
+  const details = node("details", "cell-disclosure");
+  if (disclosureKey) {
+    details.dataset.disclosureKey = disclosureKey;
+    details.open = accountLogic.disclosureIsOpen(openDisclosureKeys, disclosureKey);
+    details.addEventListener("toggle", () => {
+      accountLogic.rememberDisclosureState(openDisclosureKeys, disclosureKey, details.open);
+    });
+  }
+  details.append(node("summary", "cell-disclosure-summary", summaryText));
+  const list = node("ul", "cell-disclosure-list");
+  items.forEach((item) => list.append(node("li", itemClass, item)));
+  details.append(list);
+  parent.append(details);
+}
+
+function anchorStatus(account) {
+  const anchor = account && account.anchor ? account.anchor : null;
+  const status = anchor && anchor.status ? anchor.status : account && account.anchorHealth;
+  if (!status) {
+    return null;
+  }
+  const normalized = String(status).toLowerCase();
+  const labels = {
+    ok: "Anchor OK",
+    stale: "Anchor stale",
+    signed_out: "Anchor signed out",
+    wrong_account: "Wrong anchor account",
+    unavailable: "Anchor unavailable",
+  };
+  return {
+    label: labels[normalized] || `Anchor ${titleCase(normalized)}`,
+    className: normalized === "ok" ? "" : (normalized === "stale" ? "warning" : "error"),
+  };
+}
+
 function renderAccountSummary(accounts) {
+  // A details "toggle" event is asynchronous. Capture the live DOM property
+  // before replacing the table so a simultaneous SSE refresh cannot fold a
+  // disclosure between the user's click and that queued event.
+  const focusedDisclosureKey = accountLogic.focusedDisclosureKey(document.activeElement);
+  accountLogic.snapshotDisclosureStates(
+    openDisclosureKeys,
+    accountsRoot.querySelectorAll("details[data-disclosure-key]"),
+  );
   const table = node("table", "account-table");
-  const caption = node("caption", "visually-hidden", "Main weekly Codex usage by Linux account");
+  const caption = node("caption", "visually-hidden", "Main weekly Codex usage by OpenAI account");
   const head = node("thead");
   const headingRow = node("tr");
-  ["Account", "Plan", "Main weekly usage", "Remaining", "Next reset", "Resets available", "State", "Observed"].forEach((label) => {
+  ["Account", "Plan", "Main weekly usage", "Remaining", "Next reset", "Resets available", "Lifetime tokens (all Codex)", "Users", "Active chats", "State", "Observed"].forEach((label) => {
     headingRow.append(node("th", "", label));
   });
   head.append(headingRow);
@@ -392,17 +487,26 @@ function renderAccountSummary(accounts) {
     identityCell.scope = "row";
     const identityInner = node("span", "account-identity-inner");
     const identity = node("span", "identity-copy");
-    identity.append(node("strong", "username", account.username || "unknown"));
-    const email = account.account && account.account.email ? account.account.email : "No ChatGPT email";
-    const emailNode = node("span", "email", email);
+    const email = accountEmail(account) || "Unknown account";
+    const emailNode = node("strong", "account-email", email);
     emailNode.title = email;
     identity.append(emailNode);
+    const anchor = anchorStatus(account);
+    if (anchor) {
+      identity.append(node("span", `anchor-health ${anchor.className}`.trim(), anchor.label));
+    }
+    if (account.sourceConflict || account.conflict) {
+      const conflict = node("span", "source-conflict", "Source mismatch");
+      conflict.title = "Fresh collectors for this account reported different quota data; the canonical source is shown";
+      identity.append(conflict);
+    }
     identityInner.append(identity);
     identityCell.append(identityInner);
     row.append(identityCell);
 
-    const plan = account.account && account.account.planType
-      ? `${titleCase(account.account.planType)}`
+    const planType = accountPlan(account);
+    const plan = planType
+      ? `${titleCase(planType)}`
       : "—";
     row.append(node("td", "plan-cell", plan));
 
@@ -412,7 +516,7 @@ function renderAccountSummary(accounts) {
       const used = Math.max(0, Math.min(100, Number(usage.usedPercent) || 0));
       const remaining = remainingPercent(account);
       usageCell.append(node("strong", "usage-value", usageLabel(used)));
-      appendRemainingMeter(usageCell, remaining, used, `Remaining weekly quota for ${account.username}`);
+      appendRemainingMeter(usageCell, remaining, used, `Remaining weekly quota for ${email}`);
     } else {
       usageCell.append(node("span", "unavailable-value", "—"));
     }
@@ -423,7 +527,7 @@ function renderAccountSummary(accounts) {
     if (remaining === null) {
       remainingCell.append(node("span", "unavailable-value", "—"));
     } else {
-      const remainingValue = node("strong", "remaining-value", `≈${remaining}%`);
+      const remainingValue = node("strong", "remaining-value", accountLogic.quotaRemainingLabel(remaining));
       remainingValue.title = "Approximate remaining weekly quota, derived from OpenAI's rounded usage percentage";
       remainingCell.append(remainingValue);
     }
@@ -462,13 +566,62 @@ function renderAccountSummary(accounts) {
     }
     row.append(creditsCell);
 
+    const lifetimeCell = node("td", "lifetime-cell");
+    const lifetime = accountLogic.compactTokenCount(account.lifetimeTokens);
+    const lifetimeExact = formattedInteger(account.lifetimeTokens);
+    const lifetimeValue = node("span", lifetime === "—" ? "unavailable-value" : "lifetime-value", lifetime);
+    lifetimeValue.title = lifetime === "—"
+      ? "OpenAI did not report lifetime token usage"
+      : `${lifetimeExact} lifetime Codex tokens across all models`;
+    if (lifetime !== "—") {
+      lifetimeValue.setAttribute("aria-label", lifetimeValue.title);
+    }
+    lifetimeCell.append(lifetimeValue);
+    row.append(lifetimeCell);
+
+    const usersCell = node("td", "users-cell");
+    const users = consumerUsers(account);
+    if (users.length === 0) {
+      const none = node("span", "unavailable-value", "—");
+      none.title = "No non-anchor Linux user currently uses this account";
+      usersCell.append(none);
+    } else {
+      appendDisclosure(
+        usersCell,
+        `${users.length} user${users.length === 1 ? "" : "s"}`,
+        users.map((user) => `${user.username || "unknown"}${user.stale ? " — stale" : ""}`),
+        "user-list-item",
+        accountLogic.disclosureKey(account, "users"),
+      );
+    }
+    row.append(usersCell);
+
+    const chatsCell = node("td", "chats-cell");
+    const chats = accountLogic.accountChats(account);
+    if (chats.length === 0) {
+      chatsCell.append(node("span", "unavailable-value", "—"));
+    } else {
+      appendDisclosure(
+        chatsCell,
+        accountLogic.chatStateSummary(chats),
+        chats.map((chat) => `${chat.taskName || "Untitled chat"} — ${chat.username || "unknown"} — updated ${relativeTime(chat.updatedAt)}`),
+        "chat-list-item",
+        accountLogic.disclosureKey(account, "active-chats"),
+      );
+    }
+    row.append(chatsCell);
+
     const presentation = statusPresentation(account);
     const stateCell = node("td", "state-cell");
     stateCell.append(node("span", `status-pill ${presentation.className}`.trim(), presentation.label));
     row.append(stateCell);
 
-    const observedCell = node("td", "observed-cell", relativeTime(account.observedAt));
-    observedCell.dataset.relativeTime = account.observedAt || "";
+    const reportedObservedAt = validDate(account.observedAt);
+    const observedValue = reportedObservedAt && reportedObservedAt.getUTCFullYear() > 1
+      ? account.observedAt
+      : account.lastSeenAt;
+    const observedCell = node("td", "observed-cell", relativeTime(observedValue));
+    observedCell.dataset.relativeTime = observedValue || "";
     row.append(observedCell);
     body.append(row);
   });
@@ -478,14 +631,134 @@ function renderAccountSummary(accounts) {
     const emptyCell = node("td", "empty-cell", localunitarityOnly
       ? "No matching localunitarity Gmail accounts"
       : "No accounts available");
-    emptyCell.colSpan = 8;
+    emptyCell.colSpan = 11;
+    emptyRow.append(emptyCell);
+    body.append(emptyRow);
+  }
+
+  const foot = node("tfoot");
+  const totalRow = node("tr", "account-total-row");
+  const totalLabel = node("th", "lifetime-total-label", "Total lifetime tokens");
+  totalLabel.scope = "row";
+  totalLabel.colSpan = 6;
+  const totalCell = node("td", "lifetime-total-cell");
+  const lifetimeTotal = accountLogic.totalLifetimeTokens(accounts);
+  const totalDisplay = accountLogic.compactTokenCount(lifetimeTotal);
+  const totalValue = node("strong", totalDisplay === "—" ? "unavailable-value" : "lifetime-total-value", totalDisplay);
+  totalValue.title = totalDisplay === "—"
+    ? "No displayed account reported lifetime token usage"
+    : `${formattedInteger(lifetimeTotal)} total lifetime Codex tokens across the displayed accounts`;
+  if (totalDisplay !== "—") {
+    totalValue.setAttribute("aria-label", totalValue.title);
+  }
+  totalCell.append(totalValue);
+  const totalRemainder = node("td", "lifetime-total-remainder");
+  totalRemainder.colSpan = 4;
+  totalRow.append(totalLabel, totalCell, totalRemainder);
+  foot.append(totalRow);
+
+  table.append(caption, head, body, foot);
+  accountsRoot.replaceChildren(table);
+  accountsRoot.setAttribute("aria-busy", "false");
+  if (focusedDisclosureKey) {
+    const disclosure = Array.from(accountsRoot.querySelectorAll("details[data-disclosure-key]"))
+      .find((candidate) => candidate.dataset.disclosureKey === focusedDisclosureKey);
+    const summary = disclosure && disclosure.querySelector("summary");
+    if (summary) {
+      summary.focus({ preventScroll: true });
+    }
+  }
+}
+
+function userStatusPresentation(user) {
+  if (user && user.stale) {
+    return { label: "Stale", className: "warning" };
+  }
+  if (user && user.state === "signed_out") {
+    return { label: "Signed out", className: "warning" };
+  }
+  if (user && user.state === "api_key") {
+    return { label: "API key", className: "warning" };
+  }
+  if (user && user.state === "unavailable") {
+    return { label: "Unavailable", className: "error" };
+  }
+  return { label: "Live", className: "" };
+}
+
+function renderUserMapping(accounts) {
+  const unassigned = currentStatus && Array.isArray(currentStatus.unassignedUsers)
+    ? currentStatus.unassignedUsers
+    : [];
+  // An unassigned user has no account identity against which the account
+  // filter can match, so it appears only in the unfiltered roster.
+  const rows = accountLogic.userAccountRows(accounts, unassigned, !localunitarityOnly);
+  const table = node("table", "user-mapping-table");
+  const caption = node("caption", "visually-hidden", "Linux users and their current OpenAI account mapping");
+  const head = node("thead");
+  const headingRow = node("tr");
+  ["Linux user", "OpenAI account", "Role", "Codex version", "State", "Observed"].forEach((label) => {
+    const heading = node("th", "", label);
+    if (label === "Codex version") {
+      heading.title = "System-managed collector Codex CLI version; not a per-chat client version";
+      heading.setAttribute("aria-label", "System-managed collector Codex CLI version");
+    }
+    headingRow.append(heading);
+  });
+  head.append(headingRow);
+
+  const body = node("tbody");
+  rows.forEach(({ account, user, assigned }) => {
+    const row = node("tr");
+    if (user.stale) {
+      row.classList.add("is-stale");
+    }
+
+    const usernameCell = node("th", "mapping-username", user.username || "unknown");
+    usernameCell.scope = "row";
+    row.append(usernameCell);
+
+    const email = assigned ? accountLabel(account) : "Unassigned";
+    const accountCell = node("td", assigned ? "mapping-account" : "mapping-account unavailable-value", email);
+    accountCell.title = email;
+    row.append(accountCell);
+
+    row.append(node("td", "mapping-role", titleCase(user.role || "consumer")));
+
+    const version = accountLogic.codexVersion(user);
+    const versionCell = node("td", version === "—" ? "mapping-version unavailable-value" : "mapping-version", version);
+    versionCell.title = version === "—"
+      ? "System-managed collector Codex CLI version not reported; this is not a per-chat client version"
+      : `System-managed collector Codex CLI ${version}; this is not a per-chat client version`;
+    versionCell.setAttribute("aria-label", versionCell.title);
+    row.append(versionCell);
+
+    const presentation = userStatusPresentation(user);
+    const stateCell = node("td", "mapping-state");
+    stateCell.append(node("span", `status-pill ${presentation.className}`.trim(), presentation.label));
+    row.append(stateCell);
+
+    const observedValue = user.lastSeenAt || user.lastGoodAt || "";
+    const observedCell = node("td", "mapping-observed", relativeTime(observedValue));
+    observedCell.dataset.relativeTime = observedValue;
+    row.append(observedCell);
+    body.append(row);
+  });
+
+  if (rows.length === 0) {
+    const emptyRow = node("tr", "empty-row");
+    const emptyCell = node("td", "empty-cell", localunitarityOnly
+      ? "No users mapped to matching localunitarity Gmail accounts"
+      : "No users available");
+    emptyCell.colSpan = 6;
     emptyRow.append(emptyCell);
     body.append(emptyRow);
   }
 
   table.append(caption, head, body);
-  accountsRoot.replaceChildren(table);
-  accountsRoot.setAttribute("aria-busy", "false");
+  userMappingRoot.replaceChildren(table);
+  userMappingRoot.setAttribute("aria-busy", "false");
+  userMappingCount.textContent = `${rows.length} user${rows.length === 1 ? "" : "s"}`;
 }
 
 function localDayStart(value) {
@@ -494,7 +767,7 @@ function localDayStart(value) {
 }
 
 function resetWindowsFor(account) {
-  const entry = historyFor(account.username);
+  const entry = historyFor(account.accountKey);
   const windows = [];
   if (entry && Array.isArray(entry.events)) {
     entry.events.forEach((event) => {
@@ -528,10 +801,16 @@ function timelineGeometry(accounts) {
         earliest = Math.min(earliest, Math.max(oldestAllowed, started));
       }
     });
-    adjustmentsFor(account.username).forEach((adjustment) => {
+    adjustmentsFor(account.accountKey).forEach((adjustment) => {
       const detected = validDate(adjustment.detectedAt);
       if (detected) {
         earliest = Math.min(earliest, Math.max(oldestAllowed, detected.getTime()));
+      }
+    });
+    resetPointsFor(account.accountKey).forEach((point) => {
+      const at = Number(point.at) * 1000;
+      if (Number.isFinite(at)) {
+        earliest = Math.min(earliest, Math.max(oldestAllowed, at));
       }
     });
   });
@@ -553,28 +832,17 @@ function renderTimelineAdjustment(lane, adjustment, geometry, account) {
   const marker = node("button", "adjustment-marker");
   marker.type = "button";
   marker.style.left = `${timelineLeft(detected.getTime(), geometry)}px`;
-  marker.dataset.adjustmentId = adjustmentID(account.username, adjustment);
-  marker.dataset.adjustmentDetail = `${account.username}: ${adjustmentDescription(adjustment, true)}`;
-  marker.setAttribute("aria-label", `${account.username}. ${adjustmentDescription(adjustment)}`);
-  marker.setAttribute("aria-controls", "adjustment-detail");
+  marker.dataset.adjustmentId = adjustmentID(account.accountKey, adjustment);
+  marker.dataset.timelineMarkerId = `adjustment:${marker.dataset.adjustmentId}`;
+  const detail = `${accountLabel(account)}: ${adjustmentDescription(adjustment, true)}`;
+  configureTimelineDetailMarker(
+    marker,
+    detail,
+    `${accountLabel(account)}. ${adjustmentDescription(adjustment)}`,
+  );
   const diamond = node("span", "adjustment-diamond");
   diamond.setAttribute("aria-hidden", "true");
   marker.append(diamond);
-  marker.addEventListener("mouseenter", () => showAdjustmentDetail(account, adjustment));
-  marker.addEventListener("mouseleave", () => {
-    if (document.activeElement !== marker) {
-      restoreFocusedAdjustmentDetail();
-    }
-  });
-  marker.addEventListener("focus", () => showAdjustmentDetail(account, adjustment));
-  marker.addEventListener("blur", resetAdjustmentDetail);
-  marker.addEventListener("click", () => showAdjustmentDetail(account, adjustment));
-  marker.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      marker.blur();
-    }
-  });
   lane.append(marker);
 }
 
@@ -582,7 +850,7 @@ function timelineLeft(timestamp, geometry) {
   return geometry.labelWidth + (timestamp - geometry.start) * geometry.pixelsPerMs;
 }
 
-function renderTimelineWindow(lane, windowValue, geometry, account) {
+function renderTimelineWindow(lane, windowValue, geometry, account, resetPoints) {
   const start = Number(windowValue.windowStartedAt) * 1000;
   const end = Number(windowValue.resetsAt) * 1000;
   if (!Number.isFinite(start) || !Number.isFinite(end) || end < geometry.start || start > geometry.end) {
@@ -598,13 +866,74 @@ function renderTimelineWindow(lane, windowValue, geometry, account) {
   track.style.width = `${Math.max(2, (clippedEnd - clippedStart) * geometry.pixelsPerMs)}px`;
   lane.append(track);
 
-  if (end >= geometry.start && end <= geometry.end) {
+  const representedByResetPoint = windowValue.kind === "history" &&
+    accountLogic.resetPointMatchesWindow(resetPoints, windowValue.resetsAt);
+  if (!representedByResetPoint && end >= geometry.start && end <= geometry.end) {
     const marker = node("span", `reset-marker ${windowValue.kind === "active" ? "next" : "past"}`);
     marker.style.left = `${timelineLeft(end, geometry)}px`;
     marker.title = `${windowValue.kind === "active" ? "Next reset" : "Completed reset"}: ${new Date(end).toLocaleString()}`;
     marker.setAttribute("aria-hidden", "true");
     lane.append(marker);
   }
+}
+
+function resetPointDescription(point) {
+  const resetAt = validDate(point && point.at, true);
+  if (!resetAt) {
+    return "Reset time unavailable";
+  }
+  const used = Number(point.usedPercentBefore);
+  if (point.kind === "inferred_early") {
+    const detectedAt = validDate(point.detectedAt);
+    const priorAt = validDate(point.previousScheduledAt, true);
+    const nextAt = validDate(point.nextScheduledAt, true);
+    const details = [
+      `Inferred early reset at ${resetAt.toLocaleString()}`,
+      `${used}% used immediately before the observed drop`,
+      "inferred from usage falling before the prior schedule; not provider-confirmed",
+    ];
+    if (priorAt) {
+      details.push(`previously scheduled for ${priorAt.toLocaleString()}`);
+    }
+    if (nextAt) {
+      details.push(`next schedule moved to ${nextAt.toLocaleString()}`);
+    }
+    if (detectedAt) {
+      details.push(`detected ${detectedAt.toLocaleString()}`);
+    }
+    return details.join("; ");
+  }
+  return `Scheduled reset at ${resetAt.toLocaleString()}; ${used}% used immediately before reset`;
+}
+
+function renderTimelineResetPoint(lane, point, geometry, account, sourceAdjustment) {
+  const at = Number(point && point.at) * 1000;
+  if (!Number.isFinite(at) || at < geometry.start || at > geometry.end) {
+    return;
+  }
+  const inferred = point.kind === "inferred_early";
+  const marker = node("button", `reset-point ${inferred ? "inferred-early" : "scheduled"}`);
+  marker.type = "button";
+  marker.dataset.timelineMarkerId = ["reset", account.accountKey, point.kind, point.at, point.detectedAt].join(":");
+  const description = resetPointDescription(point);
+  marker.style.left = `${timelineLeft(at, geometry)}px`;
+  marker.title = description;
+  const shape = node("span", "reset-point-shape");
+  shape.setAttribute("aria-hidden", "true");
+  marker.append(shape);
+  let detail = `${accountLabel(account)}: ${description}`;
+  let ariaLabel = `${accountLabel(account)}. ${description}.`;
+  if (sourceAdjustment) {
+    marker.classList.add("with-adjustment");
+    marker.dataset.adjustmentId = adjustmentID(account.accountKey, sourceAdjustment);
+    const badge = node("span", "reset-point-adjustment-badge");
+    badge.setAttribute("aria-hidden", "true");
+    marker.append(badge);
+    detail += ` · Server adjustment: ${adjustmentDescription(sourceAdjustment, true)}`;
+    ariaLabel += ` Related server adjustment. ${adjustmentDescription(sourceAdjustment)}`;
+  }
+  configureTimelineDetailMarker(marker, detail, ariaLabel);
+  lane.append(marker);
 }
 
 function setTimelineToNow(smooth = false) {
@@ -623,8 +952,8 @@ function scrollBehavior(smooth) {
 
 function renderTimeline(accounts) {
   let anchorTimestamp = null;
-  const focusedAdjustmentID = document.activeElement && document.activeElement.dataset
-    ? document.activeElement.dataset.adjustmentId || null
+  const focusedTimelineMarkerID = document.activeElement && document.activeElement.dataset
+    ? document.activeElement.dataset.timelineMarkerId || null
     : null;
   if (timelineInitialized && timelineRange) {
     anchorTimestamp = timelineRange.start
@@ -632,7 +961,7 @@ function renderTimeline(accounts) {
   }
 
   const geometry = timelineGeometry(accounts);
-  resetAdjustmentDetail();
+  resetTimelineDetail();
   const canvas = node("div", "timeline-canvas");
   canvas.style.width = `${geometry.width}px`;
   canvas.style.setProperty("--label-width", `${geometry.labelWidth}px`);
@@ -647,7 +976,7 @@ function renderTimeline(accounts) {
     axis.append(tick);
     day = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1);
   }
-  const corner = node("div", "timeline-corner", "Account");
+  const corner = node("div", "timeline-corner", "OpenAI account");
   corner.setAttribute("aria-hidden", "true");
   axis.append(corner);
   canvas.append(axis);
@@ -656,7 +985,8 @@ function renderTimeline(accounts) {
     const lane = node("div", "timeline-lane");
     lane.style.width = `${geometry.width}px`;
     const label = node("div", "lane-label");
-    label.append(node("strong", "", account.username || "unknown"));
+    const labelText = accountLabel(account);
+    label.append(node("strong", "", labelText));
     const active = anchoredReset(account);
     const usage = canonicalMainUsage(account);
     let summary = "No weekly data";
@@ -669,11 +999,26 @@ function renderTimeline(accounts) {
     lane.append(label);
 
     const windows = resetWindowsFor(account);
-    windows.forEach((windowValue) => renderTimelineWindow(lane, windowValue, geometry, account));
-    const adjustments = adjustmentsFor(account.username);
-    adjustments.forEach((adjustment) => renderTimelineAdjustment(lane, adjustment, geometry, account));
+    const resetPoints = resetPointsFor(account.accountKey);
+    windows.forEach((windowValue) => renderTimelineWindow(lane, windowValue, geometry, account, resetPoints));
+    const adjustments = adjustmentsFor(account.accountKey);
+    const representedAdjustments = new Set();
+    resetPoints.forEach((point) => {
+      const adjustmentIndex = adjustments.findIndex((adjustment, index) =>
+        !representedAdjustments.has(index) && accountLogic.resetPointMatchesAdjustment(point, adjustment));
+      const sourceAdjustment = adjustmentIndex >= 0 ? adjustments[adjustmentIndex] : null;
+      if (sourceAdjustment) {
+        representedAdjustments.add(adjustmentIndex);
+      }
+      renderTimelineResetPoint(lane, point, geometry, account, sourceAdjustment);
+    });
+    adjustments.forEach((adjustment, index) => {
+      if (!representedAdjustments.has(index)) {
+        renderTimelineAdjustment(lane, adjustment, geometry, account);
+      }
+    });
 
-    if (windows.length === 0) {
+    if (windows.length === 0 && resetPoints.length === 0) {
       const empty = node("span", "lane-empty", usage ? "No fixed reset" : "No weekly data");
       empty.style.left = `${timelineLeft(Date.now(), geometry) + 22}px`;
       lane.append(empty);
@@ -682,11 +1027,23 @@ function renderTimeline(accounts) {
     const accessible = node("span", "visually-hidden");
     const completed = windows.filter((windowValue) => windowValue.kind === "history");
     const currentSummary = active && active.resetsAt
-      ? `${account.username} next resets ${formatClock(active.resetsAt)}.`
-      : `${account.username} has no fixed weekly reset.`;
-    const historySummary = completed.length > 0
-      ? ` ${completed.length} completed reset${completed.length === 1 ? "" : "s"} tracked; most recent ${formatClock(completed[completed.length - 1].resetsAt)}.`
-      : " No completed resets tracked yet.";
+      ? `${labelText} next resets ${formatClock(active.resetsAt)}.`
+      : `${labelText} has no fixed weekly reset.`;
+    const scheduledPoints = resetPoints.filter((point) => point.kind === "scheduled");
+    const inferredPoints = resetPoints.filter((point) => point.kind === "inferred_early");
+    let historySummary;
+    if (resetPoints.length > 0) {
+      const mostRecent = resetPoints[resetPoints.length - 1];
+      historySummary = ` ${resetPoints.length} reset point${resetPoints.length === 1 ? "" : "s"} tracked: ` +
+        `${scheduledPoints.length} scheduled and ${inferredPoints.length} inferred early; most recent ${formatClock(mostRecent.at)}.`;
+      if (inferredPoints.length > 0) {
+        historySummary += " Early reset points are inferred from a usage drop before the prior schedule, not provider-confirmed.";
+      }
+    } else {
+      historySummary = completed.length > 0
+        ? ` ${completed.length} completed reset${completed.length === 1 ? "" : "s"} tracked; most recent ${formatClock(completed[completed.length - 1].resetsAt)}.`
+        : " No completed resets tracked yet.";
+    }
     const recentAdjustmentAt = adjustments.length > 0
       ? validDate(adjustments[adjustments.length - 1].detectedAt)
       : null;
@@ -723,9 +1080,9 @@ function renderTimeline(accounts) {
     timelineRoot.scrollLeft = restored;
   }
 
-  if (focusedAdjustmentID) {
-    const marker = Array.from(timelineRoot.querySelectorAll("[data-adjustment-id]"))
-      .find((candidate) => candidate.dataset.adjustmentId === focusedAdjustmentID);
+  if (focusedTimelineMarkerID) {
+    const marker = Array.from(timelineRoot.querySelectorAll("[data-timeline-marker-id]"))
+      .find((candidate) => candidate.dataset.timelineMarkerId === focusedTimelineMarkerID);
     if (marker) {
       marker.focus({ preventScroll: true });
     }
@@ -738,8 +1095,13 @@ function renderTimeline(accounts) {
     trackingCopy.classList.remove("warning-copy");
     const since = validDate(historyStatus.trackingSince);
     const adjustmentsSince = validDate(historyStatus.adjustmentsTrackingSince);
+    const inferredCount = accounts.reduce((total, account) => total +
+      resetPointsFor(account.accountKey).filter((point) => point.kind === "inferred_early").length, 0);
+    const inferenceCopy = inferredCount > 0
+      ? ` ${inferredCount} early reset${inferredCount === 1 ? " is" : "s are"} inferred from usage dropping before schedule, not provider-confirmed.`
+      : "";
     trackingCopy.textContent = since
-      ? `Reset history since ${since.toLocaleString()}; server adjustments since ${adjustmentsSince ? adjustmentsSince.toLocaleString() : since.toLocaleString()}. Retained for ${accountLogic.historyRetentionDays(historyStatus.retentionDays, DEFAULT_HISTORY_DAYS)} days.`
+      ? `Reset history since ${since.toLocaleString()}; server adjustments since ${adjustmentsSince ? adjustmentsSince.toLocaleString() : since.toLocaleString()}. Retained for ${accountLogic.historyRetentionDays(historyStatus.retentionDays, DEFAULT_HISTORY_DAYS)} days.${inferenceCopy}`
       : "Scroll left to review completed weekly windows and server adjustments.";
   } else {
     trackingCopy.classList.remove("warning-copy");
@@ -754,6 +1116,7 @@ function render() {
   const accounts = displayedAccounts();
   updateViewControls(accounts.length);
   renderAccountSummary(accounts);
+  renderUserMapping(accounts);
   renderTimeline(accounts);
   demoBanner.hidden = !currentStatus.demo;
   updatedAt.textContent = relativeTime(currentStatus.generatedAt);
@@ -783,7 +1146,7 @@ function updateClockText() {
 }
 
 function acceptStatus(status) {
-  if (!status || status.schemaVersion !== 1 || !Array.isArray(status.accounts)) {
+  if (!status || status.schemaVersion !== 2 || !Array.isArray(status.accounts)) {
     return;
   }
   const incomingGenerated = validDate(status.generatedAt);
@@ -803,12 +1166,17 @@ function acceptStatus(status) {
   const announcementSignature = JSON.stringify(status.accounts.map((account) => {
     const usage = canonicalMainUsage(account);
     return [
-      account.username,
+      account.accountKey,
+      accountEmail(account),
       account.state,
       Boolean(account.stale),
       usage ? usage.usedPercent : null,
       usage ? usage.resetsAt : null,
       resetCreditsAvailable(account),
+      account.lifetimeTokens,
+      account.anchorHealth,
+      Array.isArray(account.users) ? account.users.map((user) => [user.username, user.state, user.stale, user.codexVersion]) : [],
+      accountLogic.accountChats(account).map((chat) => [chat.taskName, chat.username, chat.startedAt, chat.updatedAt]),
     ];
   }));
   if (announcementSignature !== lastAnnouncementSignature) {
@@ -820,7 +1188,7 @@ function acceptStatus(status) {
 }
 
 function acceptHistory(history) {
-  if (!history || ![1, HISTORY_SCHEMA_VERSION].includes(history.schemaVersion) || !Array.isArray(history.accounts)) {
+  if (!history || history.schemaVersion !== HISTORY_SCHEMA_VERSION || !Array.isArray(history.accounts)) {
     return;
   }
   const incomingGenerated = validDate(history.generatedAt);
@@ -839,7 +1207,7 @@ function acceptHistory(history) {
   history.accounts.forEach((account) => {
     if (Array.isArray(account.adjustments)) {
       account.adjustments.forEach((adjustment) => {
-        incomingAdjustmentIDs.add(adjustmentID(account.username, adjustment));
+        incomingAdjustmentIDs.add(adjustmentID(account.accountKey, adjustment));
       });
     }
   });

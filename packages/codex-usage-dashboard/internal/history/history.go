@@ -2,6 +2,7 @@ package history
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"io"
@@ -17,18 +18,24 @@ import (
 )
 
 const (
-	SchemaVersion               = 2
-	mainDiskSchemaVersion       = 1
-	adjustmentDiskSchemaVersion = 1
+	SchemaVersion               = 4
+	mainDiskSchemaVersion       = 2
+	adjustmentDiskSchemaVersion = 2
 	mainWeekMinutes             = int64(10_080)
-	maxStateBytes               = int64(1 << 20)
-	maxEventsPerAccount         = 128
-	maxAdjustments              = 128
+	maxStateBytes               = int64(16 << 20)
+	maxHistoryAccounts          = 128
+	maxEventsPerAccount         = 1024
+	maxAdjustments              = 1024
+	maxResetPointsPerAccount    = 1024
 	stableAfter                 = 90 * time.Second
 	resetTimestampJitterSeconds = int64((2 * time.Minute) / time.Second)
+	resetObservationFutureSkew  = int64((5 * time.Minute) / time.Second)
+	resetObservationMaxLag      = int64((24 * time.Hour) / time.Second)
 
 	AdjustmentResetTimestampChanged = "reset_timestamp_changed"
 	AdjustmentUsedPercentDecreased  = "used_percent_decreased"
+	ResetPointScheduled             = "scheduled"
+	ResetPointInferredEarly         = "inferred_early"
 )
 
 type ResetWindow struct {
@@ -43,6 +50,21 @@ type ResetEvent struct {
 	ResetsAt          int64     `json:"resetsAt"`
 	DetectedAt        time.Time `json:"detectedAt"`
 	UsedPercentBefore int       `json:"usedPercentBefore"`
+}
+
+// ResetPoint is a public, account-keyed point in the reset timeline. Scheduled
+// points come from completed anchored windows. InferredEarly points are
+// explicitly labelled inferences: the rate-limit service reported both lower
+// usage and a new seven-day window before the prior window was due to end.
+// At is Unix time so it can share the timeline scale with reset timestamps;
+// DetectedAt records when this service first observed the transition.
+type ResetPoint struct {
+	At                  int64     `json:"at"`
+	DetectedAt          time.Time `json:"detectedAt"`
+	Kind                string    `json:"kind"`
+	UsedPercentBefore   int       `json:"usedPercentBefore"`
+	PreviousScheduledAt *int64    `json:"previousScheduledAt,omitempty"`
+	NextScheduledAt     *int64    `json:"nextScheduledAt,omitempty"`
 }
 
 type WindowObservation struct {
@@ -68,10 +90,11 @@ type storedAdjustment struct {
 }
 
 type AccountHistory struct {
-	Username    string       `json:"username"`
+	AccountKey  string       `json:"accountKey"`
 	Active      *ResetWindow `json:"active,omitempty"`
 	Events      []ResetEvent `json:"events"`
 	Adjustments []Adjustment `json:"adjustments"`
+	ResetPoints []ResetPoint `json:"resetPoints"`
 }
 
 type Response struct {
@@ -130,7 +153,9 @@ type Tracker struct {
 	degraded                 bool
 }
 
-func Open(path string, usernames []string, retention time.Duration) (*Tracker, error) {
+// Open starts account-keyed history with no fixed account inventory. Accounts
+// are added only when a canonical ChatGPT snapshot is observed.
+func Open(path string, retention time.Duration) (*Tracker, error) {
 	if retention < 7*24*time.Hour || retention > 366*24*time.Hour {
 		return nil, errors.New("history retention must be between 7 and 366 days")
 	}
@@ -139,19 +164,9 @@ func Open(path string, usernames []string, retention time.Duration) (*Tracker, e
 		adjustmentPath: adjustmentPathFor(path),
 		retention:      retention,
 		now:            time.Now,
-		accounts:       make(map[string]diskAccount, len(usernames)),
-		adjustments:    make(map[string][]storedAdjustment, len(usernames)),
-		candidates:     make(map[string]candidate, len(usernames)),
-	}
-	seen := make(map[string]bool, len(usernames))
-	for _, username := range usernames {
-		if username == "" || seen[username] {
-			return nil, errors.New("history usernames must be nonempty and unique")
-		}
-		seen[username] = true
-		tracker.order = append(tracker.order, username)
-		tracker.accounts[username] = diskAccount{Events: []ResetEvent{}}
-		tracker.adjustments[username] = []storedAdjustment{}
+		accounts:       make(map[string]diskAccount),
+		adjustments:    make(map[string][]storedAdjustment),
+		candidates:     make(map[string]candidate),
 	}
 
 	now := tracker.now().UTC()
@@ -179,23 +194,14 @@ func Open(path string, usernames []string, retention time.Duration) (*Tracker, e
 		tracker.revision = loaded.Revision
 		tracker.coreRevision = loaded.Revision
 		tracker.trackingSince = loaded.TrackingSince.UTC()
-		for _, username := range tracker.order {
-			if stored, ok := loaded.Accounts[username]; ok {
-				stored.Active = cloneWindow(stored.Active)
-				stored.Events = cloneEvents(stored.Events)
-				if stored.Events == nil {
-					stored.Events = []ResetEvent{}
-				}
-				tracker.accounts[username] = stored
-			} else {
-				historyChanged = true
-			}
+		for accountKey, stored := range loaded.Accounts {
+			stored.Active = cloneWindow(stored.Active)
+			stored.Events = cloneEvents(stored.Events)
+			tracker.accounts[accountKey] = stored
+			tracker.adjustments[accountKey] = []storedAdjustment{}
+			tracker.order = append(tracker.order, accountKey)
 		}
-		for username := range loaded.Accounts {
-			if _, ok := tracker.accounts[username]; !ok {
-				historyChanged = true
-			}
-		}
+		sort.Strings(tracker.order)
 	}
 
 	adjustmentsChanged := false
@@ -212,18 +218,21 @@ func Open(path string, usernames []string, retention time.Duration) (*Tracker, e
 			tracker.revision = adjustmentState.Revision
 		}
 		tracker.adjustmentsTrackingSince = adjustmentState.TrackingSince.UTC()
-		for _, username := range tracker.order {
-			if stored, ok := adjustmentState.Accounts[username]; ok {
-				tracker.adjustments[username] = cloneStoredAdjustments(stored)
-			} else {
+		for accountKey, stored := range adjustmentState.Accounts {
+			tracker.adjustments[accountKey] = cloneStoredAdjustments(stored)
+			if _, ok := tracker.accounts[accountKey]; !ok {
+				tracker.accounts[accountKey] = diskAccount{Events: []ResetEvent{}}
+				tracker.order = append(tracker.order, accountKey)
+				historyChanged = true
+			}
+		}
+		for accountKey := range tracker.accounts {
+			if _, ok := adjustmentState.Accounts[accountKey]; !ok {
+				tracker.adjustments[accountKey] = []storedAdjustment{}
 				adjustmentsChanged = true
 			}
 		}
-		for username := range adjustmentState.Accounts {
-			if _, ok := tracker.adjustments[username]; !ok {
-				adjustmentsChanged = true
-			}
-		}
+		sort.Strings(tracker.order)
 	}
 
 	if tracker.sanitizeAdjustmentJitterLocked() {
@@ -247,16 +256,45 @@ func Open(path string, usernames []string, retention time.Duration) (*Tracker, e
 }
 
 func (t *Tracker) Observe(snapshot model.Snapshot) {
+	t.applySnapshot(snapshot, false)
+}
+
+// Rebaseline installs the current canonical account window without inferring
+// an event or adjustment from differences against the previous collector.
+// The caller must use this only when the canonical source identity changes.
+func (t *Tracker) Rebaseline(snapshot model.Snapshot) {
+	t.applySnapshot(snapshot, true)
+}
+
+func (t *Tracker) applySnapshot(snapshot model.Snapshot, rebaseline bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	now := t.now().UTC()
 	historyChanged, adjustmentsChanged := t.pruneLocked(now)
-	if snapshot.State == model.StateOK && snapshot.MainUsage != nil {
-		windowChanged, adjustmentChanged := t.observeWindowLocked(snapshot.Username, now, snapshot.MainUsage)
+	accountKey := ""
+	if snapshot.State == model.StateOK && snapshot.Account != nil && snapshot.Account.Email != nil {
+		accountKey = model.AccountKey(*snapshot.Account.Email)
+		if t.ensureAccountLocked(accountKey) {
+			historyChanged = true
+			adjustmentsChanged = true
+		}
+	}
+	if accountKey != "" && snapshot.MainUsage != nil {
+		var windowChanged, adjustmentChanged bool
+		if rebaseline {
+			windowChanged, adjustmentChanged = t.rebaselineWindowLocked(accountKey, now, snapshot.MainUsage)
+		} else {
+			windowChanged, adjustmentChanged = t.observeWindowLocked(accountKey, now, snapshot.MainUsage)
+		}
 		historyChanged = historyChanged || windowChanged
 		adjustmentsChanged = adjustmentsChanged || adjustmentChanged
 	}
+	t.commitChangesLocked(historyChanged, adjustmentsChanged)
+	return
+}
+
+func (t *Tracker) commitChangesLocked(historyChanged, adjustmentsChanged bool) {
 	if historyChanged || adjustmentsChanged {
 		t.revision++
 		t.dirty = t.dirty || historyChanged
@@ -281,24 +319,113 @@ func (t *Tracker) Observe(snapshot model.Snapshot) {
 	t.degraded = false
 }
 
+func (t *Tracker) rebaselineWindowLocked(accountKey string, receivedAt time.Time, window *model.Window) (bool, bool) {
+	if _, ok := t.accounts[accountKey]; !ok || window.WindowDurationMins == nil ||
+		*window.WindowDurationMins != mainWeekMinutes || window.ResetsAt == nil {
+		return false, false
+	}
+	resetAt := *window.ResetsAt
+	if resetAt <= receivedAt.Unix() ||
+		resetAt > receivedAt.Add(7*24*time.Hour+5*time.Minute).Unix() {
+		return false, false
+	}
+	proposed := ResetWindow{
+		WindowStartedAt: resetAt - mainWeekMinutes*60,
+		ResetsAt:        resetAt,
+		FirstObservedAt: receivedAt,
+		UsedPercent:     window.UsedPercent,
+	}
+	if err := validateWindow(proposed); err != nil {
+		return false, false
+	}
+
+	account := t.accounts[accountKey]
+	if account.Active != nil && resetTimestampsEquivalent(account.Active.ResetsAt, resetAt) {
+		changed := account.Active.UsedPercent != proposed.UsedPercent
+		account.Active.UsedPercent = proposed.UsedPercent
+		t.accounts[accountKey] = account
+		delete(t.candidates, accountKey)
+		return changed, false
+	}
+
+	// A source handoff normally rebases small collector discrepancies. It must
+	// not erase an account-level reset that is unambiguous from the persisted
+	// window itself, however. Preserve a normal boundary rollover, or an early
+	// transition whose server-reported new window plausibly began during the
+	// observation gap. observeWindowLocked records the corresponding scheduled
+	// event or inferred-reset adjustment using the usual deduplication rules.
+	if account.Active != nil {
+		active := *account.Active
+		boundaryRollover := !meaningfullyBeforeReset(active.ResetsAt, receivedAt.Unix())
+		inferredEarly := proposed.UsedPercent < active.UsedPercent &&
+			plausibleResetTransition(active.FirstObservedAt, proposed.WindowStartedAt, receivedAt)
+		if boundaryRollover || inferredEarly {
+			return t.observeWindowLocked(accountKey, receivedAt, window)
+		}
+	}
+
+	changed := account.Active != nil
+	account.Active = nil
+	delete(t.candidates, accountKey)
+	if proposed.UsedPercent > 0 {
+		account.Active = &proposed
+		changed = true
+	} else {
+		t.candidates[accountKey] = candidate{
+			window:       proposed,
+			firstSeenAt:  receivedAt,
+			lastSeenAt:   receivedAt,
+			observations: 1,
+		}
+	}
+	t.accounts[accountKey] = account
+	return changed, false
+}
+
+func (t *Tracker) ensureAccountLocked(accountKey string) bool {
+	if !validAccountKey(accountKey) {
+		return false
+	}
+	if _, ok := t.accounts[accountKey]; ok {
+		return false
+	}
+	// Disk validation applies the same aggregate bound. Do not admit a lane
+	// which could never be persisted; retention pruning will make room once an
+	// older lane no longer contains an active window, event, adjustment, or
+	// pending zero-use candidate.
+	if len(t.accounts) >= maxHistoryAccounts {
+		return false
+	}
+	t.accounts[accountKey] = diskAccount{Events: []ResetEvent{}}
+	t.adjustments[accountKey] = []storedAdjustment{}
+	t.order = append(t.order, accountKey)
+	sort.Strings(t.order)
+	return true
+}
+
 func (t *Tracker) Snapshot() Response {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	now := t.now().UTC()
+	historyChanged, adjustmentsChanged := t.pruneLocked(now)
+	t.commitChangesLocked(historyChanged, adjustmentsChanged)
 
 	accounts := make([]AccountHistory, 0, len(t.order))
-	for _, username := range t.order {
-		stored := t.accounts[username]
+	for _, accountKey := range t.order {
+		stored := t.accounts[accountKey]
 		accounts = append(accounts, AccountHistory{
-			Username:    username,
+			AccountKey:  accountKey,
 			Active:      cloneWindow(stored.Active),
 			Events:      cloneEvents(stored.Events),
-			Adjustments: publicAdjustments(t.adjustments[username]),
+			Adjustments: publicAdjustments(t.adjustments[accountKey]),
+			ResetPoints: publicResetPoints(stored.Events, t.adjustments[accountKey]),
 		})
 	}
 	return Response{
 		SchemaVersion:            SchemaVersion,
 		Revision:                 t.revision,
-		GeneratedAt:              t.now().UTC(),
+		GeneratedAt:              now,
 		TrackingSince:            t.trackingSince,
 		AdjustmentsTrackingSince: t.adjustmentsTrackingSince,
 		RetentionDays:            int(math.Ceil(t.retention.Hours() / 24)),
@@ -465,7 +592,42 @@ func (t *Tracker) pruneLocked(now time.Time) (bool, bool) {
 		}
 		t.adjustments[username] = kept
 	}
+	for accountKey, pending := range t.candidates {
+		if resetTimestampSettled(pending.window.ResetsAt, now.Unix()) ||
+			pending.lastSeenAt.Before(cutoffTime) {
+			delete(t.candidates, accountKey)
+		}
+	}
+	if t.pruneEmptyAccountsLocked() {
+		historyChanged = true
+		adjustmentsChanged = true
+	}
 	return historyChanged, adjustmentsChanged
+}
+
+func (t *Tracker) pruneEmptyAccountsLocked() bool {
+	changed := false
+	for accountKey, account := range t.accounts {
+		if account.Active != nil || len(account.Events) != 0 ||
+			len(t.adjustments[accountKey]) != 0 {
+			continue
+		}
+		if _, pending := t.candidates[accountKey]; pending {
+			continue
+		}
+		delete(t.accounts, accountKey)
+		delete(t.adjustments, accountKey)
+		changed = true
+	}
+	if !changed {
+		return false
+	}
+	t.order = t.order[:0]
+	for accountKey := range t.accounts {
+		t.order = append(t.order, accountKey)
+	}
+	sort.Strings(t.order)
+	return true
 }
 
 func (t *Tracker) reconcileSidecarLocked() bool {
@@ -530,8 +692,8 @@ func (t *Tracker) sanitizeAdjustmentJitterLocked() bool {
 }
 
 func (t *Tracker) persistDirtyLocked() error {
-	// The sidecar is written first. If the process stops before the compatible
-	// v1 core file is updated, CoreRevisionBefore suppresses the retry duplicate.
+	// The sidecar is written first. If the process stops before the core file is
+	// updated, CoreRevisionBefore suppresses the retry duplicate.
 	if t.adjustmentsDirty {
 		if err := t.persistAdjustmentsLocked(); err != nil {
 			return err
@@ -552,9 +714,9 @@ func (t *Tracker) persistHistoryLocked() error {
 		TrackingSince: t.trackingSince,
 		Accounts:      make(map[string]diskAccount, len(t.order)),
 	}
-	for _, username := range t.order {
-		account := t.accounts[username]
-		state.Accounts[username] = diskAccount{
+	for _, accountKey := range t.order {
+		account := t.accounts[accountKey]
+		state.Accounts[accountKey] = diskAccount{
 			Active: cloneWindow(account.Active),
 			Events: cloneEvents(account.Events),
 		}
@@ -577,8 +739,8 @@ func (t *Tracker) persistAdjustmentsLocked() error {
 		TrackingSince: t.adjustmentsTrackingSince,
 		Accounts:      make(map[string][]storedAdjustment, len(t.order)),
 	}
-	for _, username := range t.order {
-		state.Accounts[username] = cloneStoredAdjustments(t.adjustments[username])
+	for _, accountKey := range t.order {
+		state.Accounts[accountKey] = cloneStoredAdjustments(t.adjustments[accountKey])
 	}
 	if err := validateAdjustmentDiskState(state); err != nil {
 		return err
@@ -653,11 +815,11 @@ func loadAdjustmentState(path string) (adjustmentDiskState, error) {
 
 func validateDiskState(state diskState) error {
 	if state.SchemaVersion != mainDiskSchemaVersion || state.Revision == 0 ||
-		state.TrackingSince.IsZero() || len(state.Accounts) > 128 {
+		state.TrackingSince.IsZero() || len(state.Accounts) > maxHistoryAccounts {
 		return errors.New("invalid history header")
 	}
-	for username, account := range state.Accounts {
-		if username == "" || len(username) > 64 || len(account.Events) > maxEventsPerAccount {
+	for accountKey, account := range state.Accounts {
+		if !validAccountKey(accountKey) || len(account.Events) > maxEventsPerAccount {
 			return errors.New("invalid history account")
 		}
 		if account.Active != nil {
@@ -678,11 +840,11 @@ func validateDiskState(state diskState) error {
 
 func validateAdjustmentDiskState(state adjustmentDiskState) error {
 	if state.SchemaVersion != adjustmentDiskSchemaVersion || state.Revision == 0 ||
-		state.TrackingSince.IsZero() || len(state.Accounts) > 128 {
+		state.TrackingSince.IsZero() || len(state.Accounts) > maxHistoryAccounts {
 		return errors.New("invalid reset adjustment history header")
 	}
-	for username, adjustments := range state.Accounts {
-		if username == "" || len(username) > 64 || len(adjustments) > maxAdjustments {
+	for accountKey, adjustments := range state.Accounts {
+		if !validAccountKey(accountKey) || len(adjustments) > maxAdjustments {
 			return errors.New("invalid reset adjustment history account")
 		}
 		for _, adjustment := range adjustments {
@@ -846,7 +1008,24 @@ func adjustmentPathFor(path string) string {
 	}
 	extension := filepath.Ext(path)
 	base := strings.TrimSuffix(filepath.Base(path), extension)
-	return filepath.Join(filepath.Dir(path), base+"-adjustments"+extension)
+	if strings.HasSuffix(base, "-history") {
+		base = strings.TrimSuffix(base, "-history") + "-adjustments"
+	} else {
+		base += "-adjustments"
+	}
+	return filepath.Join(filepath.Dir(path), base+extension)
+}
+
+func validAccountKey(value string) bool {
+	if len(value) != sha256.Size*2 {
+		return false
+	}
+	for _, char := range value {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func windowObservation(window ResetWindow) WindowObservation {
@@ -877,6 +1056,85 @@ func publicAdjustments(value []storedAdjustment) []Adjustment {
 		public[index].Reasons = append([]string(nil), value[index].Reasons...)
 	}
 	return public
+}
+
+func publicResetPoints(events []ResetEvent, adjustments []storedAdjustment) []ResetPoint {
+	points := make([]ResetPoint, 0, min(maxResetPointsPerAccount, len(events)+len(adjustments)))
+	for _, event := range events {
+		points = append(points, ResetPoint{
+			At:                event.ResetsAt,
+			DetectedAt:        event.DetectedAt,
+			Kind:              ResetPointScheduled,
+			UsedPercentBefore: event.UsedPercentBefore,
+		})
+	}
+	for _, adjustment := range adjustments {
+		point, ok := inferredResetPoint(adjustment)
+		if !ok {
+			continue
+		}
+		duplicate := false
+		for _, existing := range points {
+			if resetTimestampsEquivalent(existing.At, point.At) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			points = append(points, point)
+		}
+	}
+	sort.Slice(points, func(i, j int) bool {
+		if points[i].At != points[j].At {
+			return points[i].At < points[j].At
+		}
+		if points[i].Kind != points[j].Kind {
+			return points[i].Kind == ResetPointScheduled
+		}
+		return points[i].DetectedAt.Before(points[j].DetectedAt)
+	})
+	if len(points) > maxResetPointsPerAccount {
+		points = append([]ResetPoint(nil), points[len(points)-maxResetPointsPerAccount:]...)
+	}
+	if points == nil {
+		return []ResetPoint{}
+	}
+	return points
+}
+
+func inferredResetPoint(adjustment storedAdjustment) (ResetPoint, bool) {
+	if !adjustmentHasReason(adjustment.Adjustment, AdjustmentResetTimestampChanged) ||
+		!adjustmentHasReason(adjustment.Adjustment, AdjustmentUsedPercentDecreased) ||
+		adjustment.After.UsedPercent >= adjustment.Before.UsedPercent ||
+		!plausibleResetTransition(adjustment.Before.FirstObservedAt,
+			adjustment.After.WindowStartedAt, adjustment.DetectedAt) {
+		return ResetPoint{}, false
+	}
+	previous := adjustment.Before.ResetsAt
+	next := adjustment.After.ResetsAt
+	return ResetPoint{
+		At:                  adjustment.After.WindowStartedAt,
+		DetectedAt:          adjustment.DetectedAt,
+		Kind:                ResetPointInferredEarly,
+		UsedPercentBefore:   adjustment.Before.UsedPercent,
+		PreviousScheduledAt: &previous,
+		NextScheduledAt:     &next,
+	}, true
+}
+
+func plausibleObservedWindowStart(windowStartedAt int64, detectedAt time.Time) bool {
+	delta := detectedAt.Unix() - windowStartedAt
+	return delta >= -resetObservationFutureSkew && delta <= resetObservationMaxLag
+}
+
+func plausibleResetTransition(previousObservedAt time.Time, windowStartedAt int64, detectedAt time.Time) bool {
+	// A replacement window cannot have begun before the window it supposedly
+	// replaced was observed. Such a report is necessarily a source discrepancy,
+	// even when its derived start happens to fall inside the general lag bound.
+	// Reset timestamps have whole-second precision, so compare on that same
+	// scale rather than rejecting a transition observed later in the same second.
+	return windowStartedAt >= previousObservedAt.Unix() &&
+		plausibleObservedWindowStart(windowStartedAt, detectedAt)
 }
 
 func appendAdjustment(adjustments []storedAdjustment, adjustment storedAdjustment) ([]storedAdjustment, bool) {

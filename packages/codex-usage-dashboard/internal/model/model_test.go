@@ -3,9 +3,116 @@ package model
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
+
+func TestAccountKeyNormalizesOnlyTrimAndCase(t *testing.T) {
+	want := "f437a1788ce98310abac975b885c8a54ad7149cb82043418ea61a3468756f502"
+	for _, email := range []string{
+		"localunitarity+1@gmail.com",
+		"  LocalUnitarity+1@GMAIL.COM\t",
+	} {
+		if got := AccountKey(email); got != want {
+			t.Fatalf("AccountKey(%q) = %q, want %q", email, got, want)
+		}
+	}
+	keys := map[string]bool{
+		AccountKey("localunitarity@gmail.com"):    true,
+		AccountKey("localunitarity+1@gmail.com"):  true,
+		AccountKey("local.unitarity+1@gmail.com"): true,
+	}
+	if len(keys) != 3 {
+		t.Fatalf("Gmail dots or plus suffixes were collapsed: %#v", keys)
+	}
+}
+
+func TestSanitizeTaskNameIsSingleLineAndByteBounded(t *testing.T) {
+	got := SanitizeTaskName("  investigate\nsecret\t failure\x00  ")
+	if got != "investigate secret failure" {
+		t.Fatalf("sanitized task name = %q", got)
+	}
+	long := SanitizeTaskName(strings.Repeat("é", MaxTaskNameBytes))
+	if len(long) > MaxTaskNameBytes || !utf8.ValidString(long) {
+		t.Fatalf("task-name cap split UTF-8: length=%d value=%q", len(long), long)
+	}
+	if got := SanitizeTaskName("\n\t\x00"); got != "Codex task" {
+		t.Fatalf("empty sanitized name = %q", got)
+	}
+	spoofed := "review \u202eemanresu — admin\u2066 \ue000task"
+	if got := SanitizeTaskName(spoofed); got != "review emanresu — admin task" {
+		t.Fatalf("format/private-use controls survived sanitization: %q", got)
+	}
+}
+
+func TestCodexVersionIsARestrictedBoundedToken(t *testing.T) {
+	for _, value := range []string{"0.149.0", "0.150.0-alpha.1+build_2", "dev"} {
+		if got := SanitizeCodexVersion(value); got != value {
+			t.Fatalf("SanitizeCodexVersion(%q) = %q", value, got)
+		}
+		snapshot := Snapshot{
+			SchemaVersion: SchemaVersion,
+			Username:      "codex",
+			CodexVersion:  value,
+			State:         StateSignedOut,
+			Limits:        []RateLimit{},
+			ObservedAt:    time.Now().UTC(),
+		}
+		if err := snapshot.Validate(); err != nil {
+			t.Fatalf("valid version %q: %v", value, err)
+		}
+	}
+
+	for _, value := range []string{
+		" 0.149.0", "0.149.0 ", "codex-cli 0.149.0", "0.149.0/path",
+		"0.149.0\nforged", "0.149.0\x1b[31m", strings.Repeat("1", MaxCodexVersionBytes+1),
+	} {
+		if got := SanitizeCodexVersion(value); got != "" {
+			t.Fatalf("unsafe version %q sanitized to %q", value, got)
+		}
+		snapshot := Snapshot{
+			SchemaVersion: SchemaVersion,
+			Username:      "codex",
+			CodexVersion:  value,
+			State:         StateSignedOut,
+			Limits:        []RateLimit{},
+			ObservedAt:    time.Now().UTC(),
+		}
+		if err := snapshot.Validate(); err == nil {
+			t.Fatalf("unsafe version %q unexpectedly validated", value)
+		}
+	}
+}
+
+func TestRuntimeThreadValidationRequiresCurrentAllowlistedObservation(t *testing.T) {
+	email := "person@example.com"
+	snapshot := Snapshot{
+		SchemaVersion: SchemaVersion,
+		Username:      "codex",
+		State:         StateOK,
+		Account:       &Account{Type: "chatgpt", Email: &email, PlanType: "pro"},
+		Limits:        []RateLimit{},
+		RuntimeThreads: []RuntimeThread{{
+			ThreadID: "opaque-local-id", TaskName: "Safe task", CreatedAt: 10, UpdatedAt: 20, Running: true,
+		}},
+		RuntimeThreadsRead: true,
+		ObservedAt:         time.Now().UTC(),
+	}
+	if err := snapshot.Validate(); err != nil {
+		t.Fatalf("valid runtime observation: %v", err)
+	}
+	snapshot.RuntimeThreadsRead = false
+	if err := snapshot.Validate(); err == nil {
+		t.Fatal("runtime metadata without a successful read unexpectedly validated")
+	}
+	snapshot.RuntimeThreadsRead = true
+	snapshot.RuntimeThreads = append(snapshot.RuntimeThreads, snapshot.RuntimeThreads[0])
+	if err := snapshot.Validate(); err == nil {
+		t.Fatal("duplicate runtime thread unexpectedly validated")
+	}
+}
 
 func TestNormalizeClampsAndComputesRemaining(t *testing.T) {
 	email := "person@example.com"
@@ -107,6 +214,18 @@ func TestValidateRejectsUnsafeOrUnknownValues(t *testing.T) {
 		if err := tc.Validate(); err == nil {
 			t.Fatalf("case %d unexpectedly valid", i)
 		}
+	}
+	unsafeEmail := "person\u202e@example.com"
+	unsafeDisplay := Snapshot{
+		SchemaVersion: SchemaVersion,
+		Username:      "codex",
+		State:         StateOK,
+		Account:       &Account{Type: "chatgpt", Email: &unsafeEmail, PlanType: "pro"},
+		Limits:        []RateLimit{},
+		ObservedAt:    time.Now().UTC(),
+	}
+	if err := unsafeDisplay.Validate(); err == nil {
+		t.Fatal("bidi control in a public display field unexpectedly validated")
 	}
 }
 

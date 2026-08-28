@@ -8,7 +8,10 @@ import (
 	"unicode"
 )
 
-const SchemaVersion = 1
+const (
+	SchemaVersion            = 1
+	MaxResetCreditsAvailable = int64(9_007_199_254_740_991)
+)
 
 type State string
 
@@ -67,14 +70,15 @@ type RateLimit struct {
 }
 
 type Snapshot struct {
-	SchemaVersion int         `json:"schemaVersion"`
-	Username      string      `json:"username"`
-	State         State       `json:"state"`
-	Account       *Account    `json:"account,omitempty"`
-	MainUsage     *Window     `json:"mainUsage,omitempty"`
-	Limits        []RateLimit `json:"limits"`
-	ObservedAt    time.Time   `json:"observedAt"`
-	ErrorCategory string      `json:"errorCategory,omitempty"`
+	SchemaVersion         int         `json:"schemaVersion"`
+	Username              string      `json:"username"`
+	State                 State       `json:"state"`
+	Account               *Account    `json:"account,omitempty"`
+	MainUsage             *Window     `json:"mainUsage,omitempty"`
+	ResetCreditsAvailable *int64      `json:"resetCreditsAvailable,omitempty"`
+	Limits                []RateLimit `json:"limits"`
+	ObservedAt            time.Time   `json:"observedAt"`
+	ErrorCategory         string      `json:"errorCategory,omitempty"`
 }
 
 type AccountStatus struct {
@@ -174,15 +178,15 @@ func (s Snapshot) Validate() error {
 		if s.Account == nil || s.Account.Type != "apiKey" {
 			return errors.New("api-key state requires an apiKey account")
 		}
-		if s.MainUsage != nil || len(s.Limits) != 0 || s.ErrorCategory != "" {
+		if s.MainUsage != nil || s.ResetCreditsAvailable != nil || len(s.Limits) != 0 || s.ErrorCategory != "" {
 			return errors.New("api-key state cannot include limits or an error category")
 		}
 	case StateSignedOut:
-		if s.Account != nil || s.MainUsage != nil || len(s.Limits) != 0 || s.ErrorCategory != "" {
+		if s.Account != nil || s.MainUsage != nil || s.ResetCreditsAvailable != nil || len(s.Limits) != 0 || s.ErrorCategory != "" {
 			return errors.New("signed-out state cannot include account data, limits, or errors")
 		}
 	case StateUnavailable:
-		if s.Account != nil || s.MainUsage != nil || len(s.Limits) != 0 {
+		if s.Account != nil || s.MainUsage != nil || s.ResetCreditsAvailable != nil || len(s.Limits) != 0 {
 			return errors.New("unavailable state cannot submit account data or limits")
 		}
 		if s.ErrorCategory == "" {
@@ -204,6 +208,10 @@ func (s Snapshot) Validate() error {
 	}
 	if len(s.Limits) > 32 {
 		return errors.New("too many rate-limit buckets")
+	}
+	if s.ResetCreditsAvailable != nil &&
+		(*s.ResetCreditsAvailable < 0 || *s.ResetCreditsAvailable > MaxResetCreditsAvailable) {
+		return errors.New("available reset-credit count outside allowed range")
 	}
 	if s.MainUsage != nil {
 		if err := validateWindow(s.MainUsage); err != nil {

@@ -55,5 +55,5 @@ type SpendControlLimitSnapshot struct {
 // ResetCreditsSummary intentionally omits the detail rows. Those rows contain
 // opaque identifiers that must not be forwarded or logged by the collector.
 type ResetCreditsSummary struct {
-	AvailableCount int64 `json:"availableCount"`
+	AvailableCount *int64 `json:"availableCount"`
 }

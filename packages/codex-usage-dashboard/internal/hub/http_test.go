@@ -12,6 +12,7 @@ import (
 
 	usagehistory "codex-usage-dashboard/internal/history"
 	"codex-usage-dashboard/internal/model"
+	"codex-usage-dashboard/internal/web"
 )
 
 func testHTTPHandler(t *testing.T, config HTTPHandler) http.Handler {
@@ -28,7 +29,7 @@ func testHTTPHandler(t *testing.T, config HTTPHandler) http.Handler {
 
 func TestHTTPStatusHealthAndSecurityHeaders(t *testing.T) {
 	state, _ := New([]Identity{{Username: "codex", UID: 123}}, time.Minute)
-	server := httptest.NewServer(testHTTPHandler(t, HTTPHandler{Hub: state}))
+	server := httptest.NewServer(testHTTPHandler(t, HTTPHandler{Hub: state, Assets: web.Files()}))
 	defer server.Close()
 
 	for _, path := range []string{"/healthz", "/api/v1/status"} {
@@ -61,6 +62,66 @@ func TestHTTPStatusHealthAndSecurityHeaders(t *testing.T) {
 	_ = response.Body.Close()
 	if response.StatusCode != http.StatusMethodNotAllowed || response.Header.Get("Allow") != "GET" {
 		t.Fatalf("POST status contract = %d Allow %q", response.StatusCode, response.Header.Get("Allow"))
+	}
+}
+
+func TestStaticDashboardPutsFilteredAccountOverviewFirst(t *testing.T) {
+	state, _ := New([]Identity{{Username: "codex", UID: 123}}, time.Minute)
+	server := httptest.NewServer(testHTTPHandler(t, HTTPHandler{Hub: state, Assets: web.Files()}))
+	defer server.Close()
+
+	response, err := http.Get(server.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := string(payload)
+	overview := strings.Index(page, "Account overview")
+	timeline := strings.Index(page, "Reset timeline")
+	if overview < 0 || timeline < 0 || overview >= timeline {
+		t.Fatalf("dashboard section order is wrong: overview=%d timeline=%d", overview, timeline)
+	}
+	for _, required := range []string{
+		`id="localunitarity-filter" type="checkbox" checked`,
+		`localunitarity*@gmail.com`,
+		`id="sort-mode"`,
+		`value="remaining" checked`,
+		`/assets/account_logic.js`,
+	} {
+		if !strings.Contains(page, required) {
+			t.Fatalf("dashboard page is missing %q", required)
+		}
+	}
+}
+
+func TestStatusExposesOnlyAggregateResetCreditCount(t *testing.T) {
+	state, _ := New([]Identity{{Username: "codex", UID: 123}}, time.Minute)
+	if err := state.Apply(123, testSnapshot("codex", time.Now().UTC(), 19)); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(testHTTPHandler(t, HTTPHandler{Hub: state}))
+	defer server.Close()
+
+	response, err := http.Get(server.URL + "/api/v1/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(payload), `"resetCreditsAvailable":2`) {
+		t.Fatalf("status omitted aggregate reset-credit count: %s", payload)
+	}
+	for _, forbidden := range []string{"rateLimitResetCredits", "opaque-secret"} {
+		if strings.Contains(string(payload), forbidden) {
+			t.Fatalf("status exposed reset-credit detail %q: %s", forbidden, payload)
+		}
 	}
 }
 
@@ -139,7 +200,7 @@ func TestHistoryEndpointIsReadOnlyAndOmitsAccountIdentity(t *testing.T) {
 		!strings.Contains(string(payload), `"adjustments":[]`) {
 		t.Fatalf("unexpected history response: status=%d body=%q", response.StatusCode, payload)
 	}
-	for _, forbidden := range []string{"email", "planType", "credits", "Spark", "coreRevisionBefore"} {
+	for _, forbidden := range []string{"email", "planType", "credits", "resetCreditsAvailable", "Spark", "coreRevisionBefore"} {
 		if strings.Contains(string(payload), forbidden) {
 			t.Fatalf("history response contains %q", forbidden)
 		}

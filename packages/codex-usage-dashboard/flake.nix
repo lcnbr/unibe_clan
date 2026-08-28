@@ -60,7 +60,9 @@
               mkdir -p "$HOME" "$GOCACHE" "$GOPATH"
               go test ./...
               go test -race ./...
+              node --check internal/web/static/assets/account_logic.js
               node --check internal/web/static/assets/app.js
+              node --test internal/web/account_logic_test.cjs
               runHook postBuild
             '';
             installPhase = ''

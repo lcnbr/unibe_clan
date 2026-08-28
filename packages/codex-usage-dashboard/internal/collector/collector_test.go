@@ -115,18 +115,32 @@ func TestRunRefetchesFullStateOnNotification(t *testing.T) {
 		published <- snapshot
 		return nil
 	}
+	initialCount := int64(1)
+	fake.mu.Lock()
+	fake.limits.ResetCredits = &codex.ResetCreditsSummary{AvailableCount: &initialCount}
+	fake.mu.Unlock()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- c.Run(ctx) }()
 	select {
-	case <-published:
+	case initial := <-published:
+		if initial.ResetCreditsAvailable == nil || *initial.ResetCreditsAvailable != 1 {
+			t.Fatalf("initial reset-credit count = %#v", initial.ResetCreditsAvailable)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("initial snapshot was not published")
 	}
+	updatedCount := int64(3)
+	fake.mu.Lock()
+	fake.limits.ResetCredits = &codex.ResetCreditsSummary{AvailableCount: &updatedCount}
+	fake.mu.Unlock()
 	fake.notifications <- "account/updated"
 	select {
-	case <-published:
+	case updated := <-published:
+		if updated.ResetCreditsAvailable == nil || *updated.ResetCreditsAvailable != 3 {
+			t.Fatalf("updated reset-credit count = %#v", updated.ResetCreditsAvailable)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("notification did not trigger a refetch")
 	}

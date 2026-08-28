@@ -13,6 +13,7 @@ func testSnapshot(username string, observedAt time.Time, used int) model.Snapsho
 	reset := observedAt.Add(2 * time.Hour).Unix()
 	weeklyDuration := int64(10_080)
 	weeklyReset := observedAt.Add(7 * 24 * time.Hour).Unix()
+	resetCredits := int64(2)
 	snapshot := model.Snapshot{
 		SchemaVersion: model.SchemaVersion,
 		Username:      username,
@@ -21,7 +22,8 @@ func testSnapshot(username string, observedAt time.Time, used int) model.Snapsho
 		MainUsage: &model.Window{
 			UsedPercent: used, WindowDurationMins: &weeklyDuration, ResetsAt: &weeklyReset,
 		},
-		ObservedAt: observedAt,
+		ResetCreditsAvailable: &resetCredits,
+		ObservedAt:            observedAt,
 		Limits: []model.RateLimit{{
 			ID:   "codex",
 			Name: stringPointer("Codex"),
@@ -91,7 +93,8 @@ func TestUnavailableRetainsLastGoodAndBecomesStale(t *testing.T) {
 	if status.Stale {
 		t.Fatal("last-good data became stale too early")
 	}
-	if status.State != model.StateUnavailable || status.Account == nil || status.MainUsage == nil || len(status.Limits) != 1 {
+	if status.State != model.StateUnavailable || status.Account == nil || status.MainUsage == nil ||
+		status.ResetCreditsAvailable == nil || *status.ResetCreditsAvailable != 2 || len(status.Limits) != 1 {
 		t.Fatalf("last-good data was not retained: %#v", status)
 	}
 	if !status.ObservedAt.Equal(now.Add(-30*time.Second)) || !status.LastSeenAt.Equal(now) {
@@ -127,7 +130,7 @@ func TestSignedOutClearsLastGoodAccountData(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := state.Status().Accounts[0]
-	if got.Account != nil || got.MainUsage != nil || len(got.Limits) != 0 || got.Stale {
+	if got.Account != nil || got.MainUsage != nil || got.ResetCreditsAvailable != nil || len(got.Limits) != 0 || got.Stale {
 		t.Fatalf("signed-out snapshot retained account data: %#v", got)
 	}
 }
@@ -144,10 +147,12 @@ func TestStatusAndSubscriptionsAreDefensiveCopies(t *testing.T) {
 	status := state.Status()
 	*status.Accounts[0].Account.Email = "mutated@example.com"
 	*status.Accounts[0].MainUsage.ResetsAt = 1
+	*status.Accounts[0].ResetCreditsAvailable = 99
 	*status.Accounts[0].Limits[0].Primary.ResetsAt = 1
 	fresh := state.Status()
 	if *fresh.Accounts[0].Account.Email == "mutated@example.com" ||
 		*fresh.Accounts[0].MainUsage.ResetsAt == 1 ||
+		*fresh.Accounts[0].ResetCreditsAvailable == 99 ||
 		*fresh.Accounts[0].Limits[0].Primary.ResetsAt == 1 {
 		t.Fatal("caller mutated hub state through a returned snapshot")
 	}

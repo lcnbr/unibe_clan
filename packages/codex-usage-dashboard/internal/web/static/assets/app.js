@@ -18,6 +18,12 @@ const connectionLabel = document.getElementById("connection-label");
 const screenReaderStatus = document.getElementById("screen-reader-status");
 const earlierButton = document.getElementById("timeline-earlier");
 const nowButton = document.getElementById("timeline-now");
+const localunitarityFilter = document.getElementById("localunitarity-filter");
+const sortModeButton = document.getElementById("sort-mode");
+const priorityBasisGroup = document.getElementById("priority-basis");
+const priorityBasisInputs = Array.from(document.querySelectorAll('input[name="priority-basis"]'));
+const selectionCount = document.getElementById("selection-count");
+const accountLogic = window.AccountLogic;
 
 let currentStatus = null;
 let historyStatus = null;
@@ -28,6 +34,9 @@ let latestStatusRevision = -1;
 let latestHistoryRevision = -1;
 let lastAnnouncementSignature = "";
 let knownAdjustmentIDs = null;
+let localunitarityOnly = localunitarityFilter.checked;
+let sortMode = "alphabetical";
+let priorityBasis = (priorityBasisInputs.find((input) => input.checked) || {}).value || "remaining";
 const adjustmentDetailDefault = "Focus or tap an amber marker to inspect the server-reported before and after values.";
 
 function node(tag, className, text) {
@@ -264,6 +273,59 @@ function mainReached(account) {
   return Boolean(usage && Number(usage.usedPercent) >= 100);
 }
 
+function resetCreditsAvailable(account) {
+  const value = account ? account.resetCreditsAvailable : null;
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function remainingPercent(account) {
+  const usage = canonicalMainUsage(account);
+  if (!usage) {
+    return null;
+  }
+  const reported = Number(usage.remainingPercent);
+  if (usage.remainingPercent !== null && usage.remainingPercent !== undefined && Number.isFinite(reported)) {
+    return Math.max(0, Math.min(100, reported));
+  }
+  const used = Number(usage.usedPercent);
+  return Number.isFinite(used) ? Math.max(0, Math.min(100, 100 - used)) : null;
+}
+
+function priorityFacts(account) {
+  const usage = canonicalMainUsage(account);
+  const active = anchoredReset(account);
+  const startsOnNextUse = Boolean(
+    usage && !active && isFloatingUnusedWindow(account, usage),
+  );
+  const plan = account && account.account ? String(account.account.planType || "").toLowerCase() : "";
+  return {
+    activePro: Boolean(account && account.state === "ok" && plan === "pro" && active && active.resetsAt),
+    startsOnNextUse,
+    resetCreditsAvailable: resetCreditsAvailable(account),
+    remainingPercent: remainingPercent(account),
+    nextResetAt: active && Number.isFinite(Number(active.resetsAt)) ? Number(active.resetsAt) : null,
+  };
+}
+
+function displayedAccounts() {
+  if (!currentStatus || !Array.isArray(currentStatus.accounts)) {
+    return [];
+  }
+  return accountLogic.selectAccounts(currentStatus.accounts, {
+    localOnly: localunitarityOnly,
+    sortMode,
+    priorityBasis,
+  }, priorityFacts);
+}
+
+function updateViewControls(accountCount) {
+  const priorityActive = sortMode === "priority";
+  sortModeButton.textContent = priorityActive ? "Sort alphabetically" : "Sort by priority";
+  priorityBasisGroup.disabled = !priorityActive;
+  const total = currentStatus && Array.isArray(currentStatus.accounts) ? currentStatus.accounts.length : 0;
+  selectionCount.textContent = `Showing ${accountCount} of ${total} accounts`;
+}
+
 function statusPresentation(account) {
   if (account.stale) {
     return { label: "Stale", className: "warning" };
@@ -317,22 +379,18 @@ function initials(username) {
   return value.slice(0, 2);
 }
 
-function renderAccountSummary() {
-  if (!currentStatus || !Array.isArray(currentStatus.accounts)) {
-    return;
-  }
-
+function renderAccountSummary(accounts) {
   const table = node("table", "account-table");
   const caption = node("caption", "visually-hidden", "Main weekly Codex usage by Linux account");
   const head = node("thead");
   const headingRow = node("tr");
-  ["Account", "Plan", "Main weekly usage", "Next reset", "State", "Observed"].forEach((label) => {
+  ["Account", "Plan", "Main weekly usage", "Remaining", "Next reset", "Resets available", "State", "Observed"].forEach((label) => {
     headingRow.append(node("th", "", label));
   });
   head.append(headingRow);
 
   const body = node("tbody");
-  currentStatus.accounts.forEach((account) => {
+  accounts.forEach((account) => {
     const row = node("tr");
     if (account.stale) {
       row.classList.add("is-stale");
@@ -373,6 +431,17 @@ function renderAccountSummary() {
     }
     row.append(usageCell);
 
+    const remainingCell = node("td", "remaining-cell");
+    const remaining = remainingPercent(account);
+    if (remaining === null) {
+      remainingCell.append(node("span", "unavailable-value", "—"));
+    } else {
+      const remainingValue = node("strong", "remaining-value", `≈${remaining}%`);
+      remainingValue.title = "Approximate remaining weekly quota, derived from OpenAI's rounded usage percentage";
+      remainingCell.append(remainingValue);
+    }
+    row.append(remainingCell);
+
     const resetCell = node("td", "reset-cell");
     const active = anchoredReset(account);
     if (active && active.resetsAt) {
@@ -392,6 +461,20 @@ function renderAccountSummary() {
     }
     row.append(resetCell);
 
+    const creditsCell = node("td", "reset-credits-cell");
+    const availableCredits = resetCreditsAvailable(account);
+    if (availableCredits === null) {
+      const unavailable = node("span", "unavailable-value", "—");
+      unavailable.title = "OpenAI did not report a reset-credit count";
+      creditsCell.append(unavailable);
+    } else {
+      const value = node("strong", "reset-credits-value", availableCredits);
+      value.title = `${availableCredits} earned Codex reset credit${availableCredits === 1 ? "" : "s"} available`;
+      value.setAttribute("aria-label", value.title);
+      creditsCell.append(value);
+    }
+    row.append(creditsCell);
+
     const presentation = statusPresentation(account);
     const stateCell = node("td", "state-cell");
     stateCell.append(node("span", `status-pill ${presentation.className}`.trim(), presentation.label));
@@ -402,6 +485,16 @@ function renderAccountSummary() {
     row.append(observedCell);
     body.append(row);
   });
+
+  if (accounts.length === 0) {
+    const emptyRow = node("tr", "empty-row");
+    const emptyCell = node("td", "empty-cell", localunitarityOnly
+      ? "No matching localunitarity Gmail accounts"
+      : "No accounts available");
+    emptyCell.colSpan = 8;
+    emptyRow.append(emptyCell);
+    body.append(emptyRow);
+  }
 
   table.append(caption, head, body);
   accountsRoot.replaceChildren(table);
@@ -537,11 +630,7 @@ function scrollBehavior(smooth) {
     : "auto";
 }
 
-function renderTimeline() {
-  if (!currentStatus || !Array.isArray(currentStatus.accounts)) {
-    return;
-  }
-
+function renderTimeline(accounts) {
   let anchorTimestamp = null;
   const focusedAdjustmentID = document.activeElement && document.activeElement.dataset
     ? document.activeElement.dataset.adjustmentId || null
@@ -551,7 +640,7 @@ function renderTimeline() {
       + Math.max(0, timelineRoot.scrollLeft) / timelineRange.pixelsPerMs;
   }
 
-  const geometry = timelineGeometry(currentStatus.accounts);
+  const geometry = timelineGeometry(accounts);
   resetAdjustmentDetail();
   const canvas = node("div", "timeline-canvas");
   canvas.style.width = `${geometry.width}px`;
@@ -569,7 +658,7 @@ function renderTimeline() {
   }
   canvas.append(axis);
 
-  currentStatus.accounts.forEach((account) => {
+  accounts.forEach((account) => {
     const lane = node("div", "timeline-lane");
     lane.style.width = `${geometry.width}px`;
     const label = node("div", "lane-label");
@@ -614,6 +703,12 @@ function renderTimeline() {
     lane.append(accessible);
     canvas.append(lane);
   });
+
+  if (accounts.length === 0) {
+    canvas.append(node("div", "timeline-empty", localunitarityOnly
+      ? "No matching localunitarity Gmail accounts"
+      : "No accounts available"));
+  }
 
   const nowLine = node("span", "now-line");
   nowLine.style.left = `${timelineLeft(Date.now(), geometry)}px`;
@@ -661,8 +756,10 @@ function render() {
   if (!currentStatus || !Array.isArray(currentStatus.accounts)) {
     return;
   }
-  renderTimeline();
-  renderAccountSummary();
+  const accounts = displayedAccounts();
+  updateViewControls(accounts.length);
+  renderAccountSummary(accounts);
+  renderTimeline(accounts);
   demoBanner.hidden = !currentStatus.demo;
   updatedAt.textContent = relativeTime(currentStatus.generatedAt);
   const generated = validDate(currentStatus.generatedAt);
@@ -716,12 +813,13 @@ function acceptStatus(status) {
       Boolean(account.stale),
       usage ? usage.usedPercent : null,
       usage ? usage.resetsAt : null,
+      resetCreditsAvailable(account),
     ];
   }));
   if (announcementSignature !== lastAnnouncementSignature) {
     screenReaderStatus.textContent = lastAnnouncementSignature
       ? "Account usage or reset state updated."
-      : `Usage loaded for ${status.accounts.length} accounts.`;
+      : `Usage loaded. ${selectionCount.textContent}.`;
     lastAnnouncementSignature = announcementSignature;
   }
 }
@@ -764,8 +862,7 @@ function acceptHistory(history) {
   knownAdjustmentIDs = incomingAdjustmentIDs;
   historyStatus = history;
   if (currentStatus) {
-    renderTimeline();
-    renderAccountSummary();
+    render();
   }
 }
 
@@ -836,6 +933,35 @@ earlierButton.addEventListener("click", () => {
 
 nowButton.addEventListener("click", () => setTimelineToNow(true));
 
+localunitarityFilter.addEventListener("change", () => {
+  localunitarityOnly = localunitarityFilter.checked;
+  render();
+  screenReaderStatus.textContent = `${selectionCount.textContent}. ${localunitarityOnly
+    ? "Localunitarity Gmail filter enabled."
+    : "All Codex accounts shown."}`;
+});
+
+sortModeButton.addEventListener("click", () => {
+  sortMode = sortMode === "priority" ? "alphabetical" : "priority";
+  render();
+  screenReaderStatus.textContent = sortMode === "priority"
+    ? `Priority sorting enabled by ${priorityBasis === "reset" ? "soonest weekly reset" : "most quota remaining"}.`
+    : "Alphabetical sorting enabled.";
+});
+
+priorityBasisInputs.forEach((input) => {
+  input.addEventListener("change", () => {
+    if (!input.checked) {
+      return;
+    }
+    priorityBasis = input.value === "reset" ? "reset" : "remaining";
+    render();
+    screenReaderStatus.textContent = `Priority ordering now uses ${priorityBasis === "reset"
+      ? "soonest weekly reset"
+      : "most quota remaining"}.`;
+  });
+});
+
 timelineRoot.addEventListener("keydown", (event) => {
   if (!timelineRange) {
     return;
@@ -858,7 +984,7 @@ if ("ResizeObserver" in window) {
     window.clearTimeout(resizeTimer);
     resizeTimer = window.setTimeout(() => {
       if (currentStatus) {
-        renderTimeline();
+        renderTimeline(displayedAccounts());
       }
     }, 100);
   }).observe(timelineRoot);

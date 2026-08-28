@@ -146,3 +146,33 @@ func TestSanitizeMainUsageUsesOnlyCanonicalTopLevelWeeklyWindow(t *testing.T) {
 		t.Fatalf("map bucket was used as canonical fallback: %#v", got)
 	}
 }
+
+func TestSanitizeResetCreditsPreservesZeroAndRejectsInvalidCounts(t *testing.T) {
+	zero := int64(0)
+	positive := int64(3)
+	negative := int64(-1)
+	tooLarge := model.MaxResetCreditsAvailable + 1
+	tests := []struct {
+		name     string
+		response codex.RateLimitsResponse
+		want     *int64
+	}{
+		{name: "object unavailable"},
+		{name: "count unavailable", response: codex.RateLimitsResponse{ResetCredits: &codex.ResetCreditsSummary{}}},
+		{name: "authoritative zero", response: codex.RateLimitsResponse{ResetCredits: &codex.ResetCreditsSummary{AvailableCount: &zero}}, want: &zero},
+		{name: "positive", response: codex.RateLimitsResponse{ResetCredits: &codex.ResetCreditsSummary{AvailableCount: &positive}}, want: &positive},
+		{name: "negative", response: codex.RateLimitsResponse{ResetCredits: &codex.ResetCreditsSummary{AvailableCount: &negative}}},
+		{name: "not exactly representable in JavaScript", response: codex.RateLimitsResponse{ResetCredits: &codex.ResetCreditsSummary{AvailableCount: &tooLarge}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := sanitizeResetCredits(test.response)
+			if test.want == nil && got != nil {
+				t.Fatalf("got %d, want unavailable", *got)
+			}
+			if test.want != nil && (got == nil || *got != *test.want) {
+				t.Fatalf("got %v, want %d", got, *test.want)
+			}
+		})
+	}
+}

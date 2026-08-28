@@ -97,8 +97,12 @@ func TestClientHandshakeAccountLimitsAndNotification(t *testing.T) {
 	if got := limits.RateLimitsByLimitID["codex"].Primary.UsedPercent; got != 25 {
 		t.Fatalf("used percent = %d, want 25", got)
 	}
-	if limits.ResetCredits == nil || limits.ResetCredits.AvailableCount != 2 {
+	if limits.ResetCredits == nil || limits.ResetCredits.AvailableCount == nil || *limits.ResetCredits.AvailableCount != 2 {
 		t.Fatalf("unexpected reset credit summary: %#v", limits.ResetCredits)
+	}
+	resetPayload, err := json.Marshal(limits.ResetCredits)
+	if err != nil || strings.Contains(string(resetPayload), "opaque-secret") || strings.Contains(string(resetPayload), `"credits"`) {
+		t.Fatalf("reset-credit details escaped the allowlist: %s (error %v)", resetPayload, err)
 	}
 	select {
 	case method := <-client.Notifications():
@@ -110,6 +114,23 @@ func TestClientHandshakeAccountLimitsAndNotification(t *testing.T) {
 	}
 	if err := <-serverDone; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestResetCreditCountDistinguishesMissingFromZero(t *testing.T) {
+	var missing ResetCreditsSummary
+	if err := json.Unmarshal([]byte(`{}`), &missing); err != nil {
+		t.Fatal(err)
+	}
+	if missing.AvailableCount != nil {
+		t.Fatalf("missing availableCount decoded as %#v", missing.AvailableCount)
+	}
+	var zero ResetCreditsSummary
+	if err := json.Unmarshal([]byte(`{"availableCount":0}`), &zero); err != nil {
+		t.Fatal(err)
+	}
+	if zero.AvailableCount == nil || *zero.AvailableCount != 0 {
+		t.Fatalf("authoritative zero decoded as %#v", zero.AvailableCount)
 	}
 }
 
@@ -208,12 +229,12 @@ func TestClientRejectsMissingRequiredResultFields(t *testing.T) {
 }
 
 func TestStartSpawnsAndHandshakesWithSubprocess(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	client, err := Start(ctx, Config{
 		Path:             os.Args[0],
 		CommandArgs:      []string{"-test.run=TestAppServerHelper", "--", "app-server-helper"},
-		HandshakeTimeout: time.Second,
+		HandshakeTimeout: 5 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)

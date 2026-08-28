@@ -19,24 +19,37 @@ third-party request.
 
 The UI has two coordinated views:
 
+- a compact one-row-per-user account overview with the full ChatGPT email,
+  plan, canonical main weekly usage, remaining percentage, next reset,
+  authoritative earned-reset count when OpenAI reports it, freshness, and
+  state; and
 - a horizontally scrollable weekly timeline with one lane per Linux user,
   anchored next resets, completed reset history, amber server-adjustment
   markers, and an honest “starts on next use” state for unused windows whose
-  reset timestamp is still moving; and
-- a compact one-row-per-user account overview with the full ChatGPT email,
-  plan, canonical main weekly usage, reset countdown, freshness, and state.
+  reset timestamp is still moving.
+
+Both views use the same presentation-only account selection and ordering. A
+default-on, case-insensitive `localunitarity*@gmail.com` filter can be disabled
+to reveal every configured account. The sort button toggles alphabetical and
+priority order. Priority puts active Pro windows first, then “starts on next
+use”, then accounts with at least one earned reset credit; within each tier the
+radio choice uses either most remaining weekly quota or the soonest anchored
+weekly reset, with username as the deterministic final tie-break.
 
 Spark and every other model-specific bucket are excluded from both views. The
 collector takes main usage only from App Server's authoritative top-level
 `rateLimits` value and requires an exact 10,080-minute window. The detailed
 `GET /api/v1/status` response continues to contain all sanitized buckets for
 diagnostics, while `GET /api/v1/history` contains only usernames and reset
-window/adjustment metadata.
+window/adjustment metadata. The live earned-reset count is not persisted.
 
-Codex App Server exposes rounded whole-number percentages and reset windows.
-It does not expose a reliable exact count of messages remaining, so the
-dashboard never invents one. A reported 0% can include usage below 0.5%.
-Historical token activity is intentionally excluded.
+Codex App Server exposes rounded whole-number percentages, reset windows, and
+sometimes an aggregate `availableCount` for earned rate-limit reset credits.
+The dashboard distinguishes an authoritative zero from an unavailable count
+and never retains the accompanying opaque credit rows. App Server does not
+expose a reliable exact count of messages remaining, so the dashboard never
+invents one. A reported 0% can include usage below 0.5%. Historical token
+activity is intentionally excluded.
 
 The protocol integration uses the documented `account/read` and
 `account/rateLimits/read` methods:
@@ -131,7 +144,9 @@ nix build --impure -L \
 ```
 
 The focused dashboard check builds the application, runs all Go tests normally
-and under the race detector, and evaluates the NixOS module contract.
+and under the race detector, runs the dependency-free account filter/priority
+policy tests in Node.js, checks both browser scripts, and evaluates the NixOS
+module contract.
 
 For an interactive development shell:
 

@@ -61,6 +61,10 @@ button {
 .section-heading,
 .timeline-tools,
 .timeline-actions,
+.sort-controls,
+.priority-basis,
+.filter-toggle,
+.view-meta,
 .footer-security {
   display: flex;
   align-items: center;
@@ -258,13 +262,81 @@ h1 span {
   line-height: 1.55;
 }
 
-.updated-copy,
+.view-meta,
 .tracking-copy {
   color: var(--muted-2);
   font-family: var(--mono);
   font-size: 10px;
   letter-spacing: .035em;
   text-transform: uppercase;
+}
+
+.account-tools {
+  max-width: 760px;
+  display: flex;
+  align-items: flex-end;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.filter-toggle {
+  gap: 9px;
+  color: #cbd0cf;
+  font-family: var(--mono);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.filter-toggle input,
+.priority-basis input {
+  accent-color: var(--lime);
+}
+
+.filter-toggle code {
+  color: var(--lime);
+  font-family: inherit;
+}
+
+.sort-controls {
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.priority-basis {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  gap: 10px;
+  border: 0;
+}
+
+.priority-basis label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 9px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.priority-basis:disabled {
+  opacity: .46;
+}
+
+.priority-basis:disabled label {
+  cursor: default;
+}
+
+.view-meta {
+  gap: 12px;
+}
+
+.view-meta span + span {
+  padding-left: 12px;
+  border-left: 1px solid var(--line);
 }
 
 .tracking-copy.warning-copy {
@@ -322,6 +394,8 @@ h1 span {
 }
 
 .quiet-button:focus-visible,
+.filter-toggle input:focus-visible,
+.priority-basis input:focus-visible,
 .timeline-scroll:focus-visible,
 .account-table-wrap:focus-visible {
   outline: 2px solid var(--blue);
@@ -543,6 +617,15 @@ h1 span {
   white-space: nowrap;
 }
 
+.timeline-empty {
+  position: absolute;
+  top: 112px;
+  left: calc(var(--label-width) + 24px);
+  color: var(--muted-2);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
 .now-line {
   position: absolute;
   top: 50px;
@@ -616,7 +699,7 @@ h1 span {
 
 .account-table {
   width: 100%;
-  min-width: 1040px;
+  min-width: 1240px;
   border-collapse: collapse;
   table-layout: fixed;
 }
@@ -640,12 +723,14 @@ h1 span {
   text-transform: uppercase;
 }
 
-.account-table thead th:nth-child(1) { width: 28%; }
-.account-table thead th:nth-child(2) { width: 8%; }
-.account-table thead th:nth-child(3) { width: 19%; }
-.account-table thead th:nth-child(4) { width: 21%; }
-.account-table thead th:nth-child(5) { width: 12%; }
-.account-table thead th:nth-child(6) { width: 12%; }
+.account-table thead th:nth-child(1) { width: 23%; }
+.account-table thead th:nth-child(2) { width: 7%; }
+.account-table thead th:nth-child(3) { width: 16%; }
+.account-table thead th:nth-child(4) { width: 9%; }
+.account-table thead th:nth-child(5) { width: 18%; }
+.account-table thead th:nth-child(6) { width: 10%; }
+.account-table thead th:nth-child(7) { width: 9%; }
+.account-table thead th:nth-child(8) { width: 8%; }
 
 .account-table tbody tr:last-child th,
 .account-table tbody tr:last-child td {
@@ -754,6 +839,17 @@ h1 span {
   font-weight: 620;
 }
 
+.remaining-value,
+.reset-credits-value {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 620;
+}
+
+.reset-credits-value {
+  color: var(--lime);
+}
+
 .meter {
   width: 100%;
   height: 5px;
@@ -850,6 +946,14 @@ h1 span {
 .unavailable-value {
   color: var(--muted-2);
   font-family: var(--mono);
+}
+
+.empty-cell {
+  height: 96px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  text-align: center !important;
 }
 
 .table-skeleton {
@@ -965,6 +1069,20 @@ noscript {
     font-size: 31px;
   }
 
+  .account-tools {
+    width: 100%;
+    align-items: flex-start;
+  }
+
+  .sort-controls {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .view-meta {
+    flex-wrap: wrap;
+  }
+
   .timeline-actions {
     flex: 1;
   }
@@ -997,7 +1115,7 @@ noscript {
   }
 
   .account-table {
-    min-width: 940px;
+    min-width: 1160px;
   }
 
   .account-table th,

@@ -92,6 +92,19 @@ func sanitizeMainUsage(response codex.RateLimitsResponse) *model.Window {
 	return nil
 }
 
+// sanitizeResetCredits forwards only the authoritative aggregate count. App
+// Server may also return opaque credit rows; the client type intentionally
+// cannot retain them and this boundary rejects nonsensical counts.
+func sanitizeResetCredits(response codex.RateLimitsResponse) *int64 {
+	if response.ResetCredits == nil || response.ResetCredits.AvailableCount == nil ||
+		*response.ResetCredits.AvailableCount < 0 ||
+		*response.ResetCredits.AvailableCount > model.MaxResetCreditsAvailable {
+		return nil
+	}
+	available := *response.ResetCredits.AvailableCount
+	return &available
+}
+
 func sanitizeLimit(input codex.RateLimitSnapshot, fallbackID string, index int) model.RateLimit {
 	id := ""
 	if input.LimitID != nil {

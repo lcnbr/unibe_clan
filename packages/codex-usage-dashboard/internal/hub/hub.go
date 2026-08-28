@@ -122,6 +122,7 @@ func (h *Hub) Apply(uid uint32, incoming model.Snapshot) error {
 		// Preserve useful account/limit data while making the current failure explicit.
 		incoming.Account = cloneAccount(current.snapshot.Account)
 		incoming.MainUsage = cloneWindow(current.snapshot.MainUsage)
+		incoming.ResetCreditsAvailable = cloneInt64(current.snapshot.ResetCreditsAvailable)
 		incoming.Limits = cloneLimits(current.snapshot.Limits)
 		incoming.ObservedAt = current.snapshot.ObservedAt
 	} else {
@@ -222,7 +223,7 @@ func (h *Hub) SeedDemo() {
 			email string
 			plan  string
 			used  int
-		}{uid: uid, email: username + "@example.com", plan: "plus", used: 18 + len(identities)*17})
+		}{uid: uid, email: "localunitarity+demo-" + username + "@gmail.com", plan: "plus", used: 18 + len(identities)*17})
 	}
 	sort.Slice(identities, func(i, j int) bool { return identities[i].uid < identities[j].uid })
 	shortWindow := int64(300)
@@ -233,6 +234,7 @@ func (h *Hub) SeedDemo() {
 		plan := identity.plan
 		resetPrimary := base.Add(time.Duration(65+i*23) * time.Minute).Unix()
 		resetSecondary := base.Add(time.Duration(3+i) * 24 * time.Hour).Unix()
+		resetCredits := int64(i % 3)
 		snapshot := model.Snapshot{
 			SchemaVersion: model.SchemaVersion,
 			Username:      h.byUID[identity.uid],
@@ -242,6 +244,7 @@ func (h *Hub) SeedDemo() {
 			MainUsage: &model.Window{
 				UsedPercent: identity.used / 2, WindowDurationMins: &longWindow, ResetsAt: &resetSecondary,
 			},
+			ResetCreditsAvailable: &resetCredits,
 			Limits: []model.RateLimit{{
 				ID:       "codex",
 				Name:     &name,
@@ -260,6 +263,14 @@ func (h *Hub) SeedDemo() {
 }
 
 func cloneTime(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}
+
+func cloneInt64(value *int64) *int64 {
 	if value == nil {
 		return nil
 	}
@@ -361,6 +372,7 @@ func cloneAccount(value *model.Account) *model.Account {
 func cloneSnapshot(value model.Snapshot) model.Snapshot {
 	value.Account = cloneAccount(value.Account)
 	value.MainUsage = cloneWindow(value.MainUsage)
+	value.ResetCreditsAvailable = cloneInt64(value.ResetCreditsAvailable)
 	value.Limits = cloneLimits(value.Limits)
 	return value
 }

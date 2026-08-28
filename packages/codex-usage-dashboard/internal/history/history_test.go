@@ -14,6 +14,7 @@ import (
 func historySnapshot(username string, observedAt time.Time, used int, resetAt int64) model.Snapshot {
 	email := "private@example.com"
 	duration := mainWeekMinutes
+	resetCredits := int64(3)
 	snapshot := model.Snapshot{
 		SchemaVersion: model.SchemaVersion,
 		Username:      username,
@@ -24,8 +25,9 @@ func historySnapshot(username string, observedAt time.Time, used int, resetAt in
 			WindowDurationMins: &duration,
 			ResetsAt:           &resetAt,
 		},
-		Limits:     []model.RateLimit{},
-		ObservedAt: observedAt,
+		ResetCreditsAvailable: &resetCredits,
+		Limits:                []model.RateLimit{},
+		ObservedAt:            observedAt,
 	}
 	snapshot.Normalize()
 	return snapshot
@@ -117,6 +119,7 @@ func TestPositiveWindowPersistsAndReloadsPrivately(t *testing.T) {
 			[]byte("private@example.com"),
 			[]byte("Spark"),
 			[]byte("credits"),
+			[]byte("resetCreditsAvailable"),
 			[]byte("accountId"),
 		} {
 			if bytes.Contains(payload, forbidden) {

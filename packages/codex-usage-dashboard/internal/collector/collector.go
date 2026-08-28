@@ -252,6 +252,7 @@ func (c *Collector) refresh(ctx context.Context, client appServer) (bool, string
 		}
 		snapshot.Limits = sanitizeLimits(limits)
 		snapshot.MainUsage = sanitizeMainUsage(limits)
+		snapshot.ResetCreditsAvailable = sanitizeResetCredits(limits)
 	}
 	snapshot.Normalize()
 	if err := snapshot.Validate(); err != nil {

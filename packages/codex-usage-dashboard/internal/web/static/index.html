@@ -44,6 +44,38 @@
         Preview data is active. No account information is being shown.
       </div>
 
+      <section class="dashboard-section" aria-labelledby="accounts-heading">
+        <header class="section-heading">
+          <div>
+            <p class="section-kicker">Canonical quota only</p>
+            <h2 id="accounts-heading">Account overview</h2>
+            <p class="section-copy">One compact row per Linux user. Spark and other model-specific buckets are excluded. Controls apply to both views.</p>
+          </div>
+          <div class="account-tools" aria-label="Account view controls">
+            <label class="filter-toggle">
+              <input id="localunitarity-filter" type="checkbox" checked aria-controls="accounts timeline">
+              <span><code>localunitarity*@gmail.com</code> only</span>
+            </label>
+            <div class="sort-controls">
+              <button id="sort-mode" class="quiet-button" type="button" aria-controls="accounts timeline">Sort by priority</button>
+              <fieldset id="priority-basis" class="priority-basis" disabled>
+                <legend class="visually-hidden">Priority ordering metric</legend>
+                <label><input type="radio" name="priority-basis" value="remaining" checked> Quota remaining</label>
+                <label><input type="radio" name="priority-basis" value="reset"> Weekly reset</label>
+              </fieldset>
+            </div>
+            <div class="view-meta">
+              <span id="selection-count">— accounts</span>
+              <span>Updated <time id="updated-at">—</time></span>
+            </div>
+          </div>
+        </header>
+
+        <div id="accounts" class="account-table-wrap" role="region" aria-labelledby="accounts-heading" aria-busy="true" tabindex="0">
+          <div class="table-skeleton" aria-hidden="true"></div>
+        </div>
+      </section>
+
       <section class="dashboard-section" aria-labelledby="timeline-heading">
         <header class="section-heading">
           <div>
@@ -67,21 +99,6 @@
         <p id="tracking-copy" class="tracking-copy">Reset and server-adjustment history begins with this tracker.</p>
       </section>
 
-      <section class="dashboard-section" aria-labelledby="accounts-heading">
-        <header class="section-heading">
-          <div>
-            <p class="section-kicker">Canonical quota only</p>
-            <h2 id="accounts-heading">Account overview</h2>
-            <p class="section-copy">One compact row per Linux user. Spark and other model-specific buckets are excluded.</p>
-          </div>
-          <div class="updated-copy">Updated <time id="updated-at">—</time></div>
-        </header>
-
-        <div id="accounts" class="account-table-wrap" role="region" aria-labelledby="accounts-heading" aria-busy="true" tabindex="0">
-          <div class="table-skeleton" aria-hidden="true"></div>
-        </div>
-      </section>
-
       <p id="screen-reader-status" class="visually-hidden" aria-live="polite"></p>
     </main>
 
@@ -91,6 +108,7 @@
     </footer>
   </div>
   <noscript>This dashboard requires JavaScript to display live account status.</noscript>
+  <script src="/assets/account_logic.js" defer></script>
   <script src="/assets/app.js" defer></script>
 </body>
 </html>

@@ -8,6 +8,7 @@
   codexPackage = pkgs.callPackage ./package.nix {};
   sharedHomeSource = pkgs.writeText "codex-home.nix" (builtins.readFile ./home.nix);
   sharedPackageSource = pkgs.writeText "codex-package.nix" (builtins.readFile ./package.nix);
+  sharedUsersSource = pkgs.writeText "codex-users.nix" (builtins.readFile ./users.nix);
   standaloneFlakeSource = pkgs.writeText "codex-flake-${codexUsername}.nix" ''
     {
       description = "Unified Codex Home Manager configuration";
@@ -37,6 +38,10 @@
       target = "package.nix";
     }
     {
+      source = sharedUsersSource;
+      target = "users.nix";
+    }
+    {
       source = standaloneFlakeSource;
       target = "flake.nix";
     }
@@ -45,16 +50,7 @@
       target = "flake.lock";
     }
   ];
-  allowedUsernames = [
-    "codex"
-    "codex-1"
-    "codex-2"
-    "codex-3"
-    "codex-dummy-0"
-    "codex-dummy-1"
-    "codex-dummy-2"
-    "codex-dummy-3"
-  ];
+  allowedUsernames = import ./users.nix;
 in {
   assertions = [
     {
@@ -91,8 +87,9 @@ in {
   # Home Manager normally links managed files back into the Nix store. A flake
   # cannot follow those out-of-tree links during pure evaluation, so install
   # regular files atomically instead. The identity-neutral home.nix and its
-  # package expression are byte-identical for every account; only flake.nix
-  # carries the username required by standalone `nh home switch`.
+  # package expression are byte-identical for every account. These per-user
+  # files remain a recovery copy; ordinary `nh home switch` uses the editable
+  # shared flake under /common/nix/clan.
   home.activation.installUnifiedCodexHome = lib.hm.dag.entryAfter ["linkGeneration"] ''
     targetDir=${lib.escapeShellArg "${config.xdg.configHome}/home-manager"}
     backupSuffix=.before-codex-unification
@@ -132,7 +129,9 @@ in {
 
     nh = {
       enable = true;
-      homeFlake = "${config.xdg.configHome}/home-manager";
+      # The explicit path: URI prevents Nix from treating the enclosing shared
+      # checkout as a Git flake, whose metadata is intentionally owner-only.
+      homeFlake = "path:/common/nix/clan/home-manager/codex";
     };
 
     jujutsu.enable = true;

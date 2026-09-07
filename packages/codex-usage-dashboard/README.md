@@ -26,7 +26,8 @@ The UI has three coordinated views:
   lifetime tokens, anchor health, consumer-user and active-chat dropdowns,
   freshness, and state;
 - a compact one-row-per-Linux-user account mapping with anchor/consumer role,
-  collector Codex CLI version, freshness, and state; and
+  the last observed immutable Codex CLI package version, its observation time,
+  freshness, and state; and
 - a horizontally scrollable weekly timeline with one lane per opaque account,
   anchored next resets, completed reset history, explicitly labelled inferred
   early/new-window reset points, amber server-adjustment markers, and an honest
@@ -39,10 +40,15 @@ sessions remain private and are omitted. Anchors remain visible through anchor
 health instead. A chat disappears on `Stop` or `SessionEnd`, or after 30 minutes
 with no hook event.
 
-The user-to-account roster includes the version of the exact system-managed
-Codex CLI executable configured for each user's collector. This is collector
-CLI inventory, not a claim about the client version that originated any
-individual chat. An unavailable version probe is shown as unknown.
+Each collector finds the newest-started live Codex process owned by its Linux
+user and reads its immutable Nix-store package metadata without executing the
+discovered binary. Only full executable paths in the administrator-managed
+version registry are eligible. The collector rejects its own processes,
+writable or malformed targets, cross-mount inode mismatches, and
+process-identity races. The newest observation is retained across account
+switches and transient failures, but never persisted. Standalone, newly updated,
+or otherwise unregistered installations are shown as unknown rather than
+guessed.
 
 All three views use the same presentation-only account selection and ordering. A
 default-on, case-insensitive `localunitarity*@gmail.com` filter can be disabled
@@ -93,11 +99,14 @@ recycles after account-file metadata changes, and restarts the app-server at
 least every five minutes. The dashboard maps the kernel-reported sender UID to
 a fixed username; a collector or hook cannot claim another user.
 
-At collector startup, the service runs the configured pinned executable once
-with `--version`. It discards stderr and retains only a strictly bounded version
-token from stdout; it does not open or parse authentication material. The
-dashboard keeps the last successfully reported version for that Linux user
-across sign-out, account switching, and transient collector failures.
+On each refresh, the collector performs a bounded, read-only scan for live
+same-user Codex processes. It accepts only an exact Codex executable in an
+administrator-registered, immutable, store-owned Nix output, verifies that the
+process executable and host path identify the same file, and uses the
+registered, strictly validated version token. It never executes a discovered
+process binary and does not open or parse authentication material. The
+dashboard keeps the newest successful observation for that Linux user across
+sign-out, account switching, and transient discovery failures.
 
 The dashboard keeps current account snapshots only in memory. An unavailable
 refresh retains last-good data, while data older than 90 seconds is marked
@@ -178,9 +187,8 @@ at 16 MiB.
   `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, and `SessionEnd`.
   The reporter discards prompts, previews, tool inputs, paths, repository and
   environment metadata. It forwards only bounded opaque session/turn lookup
-  keys to the peer-authenticated activity socket; those keys and sanitized
-  chat names remain only in memory and are never returned, logged, or
-  persisted.
+  keys to the peer-authenticated activity socket; those keys and sanitized chat
+  names remain only in memory and are never returned, logged, or persisted.
 - The dashboard has `ProtectHome=true`, no home-directory bind, and an
   outbound network deny. Collectors see only their owner's `.codex`
   directory inside their systemd home namespace.

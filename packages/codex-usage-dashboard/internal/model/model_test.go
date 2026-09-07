@@ -52,13 +52,15 @@ func TestCodexVersionIsARestrictedBoundedToken(t *testing.T) {
 		if got := SanitizeCodexVersion(value); got != value {
 			t.Fatalf("SanitizeCodexVersion(%q) = %q", value, got)
 		}
+		observedAt := time.Now().UTC()
 		snapshot := Snapshot{
-			SchemaVersion: SchemaVersion,
-			Username:      "codex",
-			CodexVersion:  value,
-			State:         StateSignedOut,
-			Limits:        []RateLimit{},
-			ObservedAt:    time.Now().UTC(),
+			SchemaVersion:          SchemaVersion,
+			Username:               "codex",
+			CodexVersion:           value,
+			CodexVersionObservedAt: &observedAt,
+			State:                  StateSignedOut,
+			Limits:                 []RateLimit{},
+			ObservedAt:             observedAt,
 		}
 		if err := snapshot.Validate(); err != nil {
 			t.Fatalf("valid version %q: %v", value, err)
@@ -67,7 +69,8 @@ func TestCodexVersionIsARestrictedBoundedToken(t *testing.T) {
 
 	for _, value := range []string{
 		" 0.149.0", "0.149.0 ", "codex-cli 0.149.0", "0.149.0/path",
-		"0.149.0\nforged", "0.149.0\x1b[31m", strings.Repeat("1", MaxCodexVersionBytes+1),
+		"0.149.0\nforged", "0.149.0\x1b[31m", "not-a-version-token", "v0.153.0", "0.153",
+		strings.Repeat("1", MaxCodexVersionBytes+1),
 	} {
 		if got := SanitizeCodexVersion(value); got != "" {
 			t.Fatalf("unsafe version %q sanitized to %q", value, got)
@@ -83,6 +86,20 @@ func TestCodexVersionIsARestrictedBoundedToken(t *testing.T) {
 		if err := snapshot.Validate(); err == nil {
 			t.Fatalf("unsafe version %q unexpectedly validated", value)
 		}
+	}
+
+	now := time.Now().UTC()
+	withoutTimestamp := Snapshot{
+		SchemaVersion: SchemaVersion, Username: "codex", CodexVersion: "0.153.4",
+		State: StateSignedOut, Limits: []RateLimit{}, ObservedAt: now,
+	}
+	if err := withoutTimestamp.Validate(); err == nil {
+		t.Fatal("version without exact observation timestamp validated")
+	}
+	wrongTimestamp := now.Add(-time.Second)
+	withoutTimestamp.CodexVersionObservedAt = &wrongTimestamp
+	if err := withoutTimestamp.Validate(); err == nil {
+		t.Fatal("version with mismatched observation timestamp validated")
 	}
 }
 

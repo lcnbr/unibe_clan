@@ -65,15 +65,10 @@ func sanitizeRecentThreads(response codex.ThreadListResponse) []model.RecentThre
 	bySession := make(map[string]model.RecentThread, min(len(response.Threads), model.MaxRecentThreads))
 	order := make([]string, 0, min(len(response.Threads), model.MaxRecentThreads))
 	for _, thread := range response.Threads {
-		if thread.ParentThreadID != nil || !thread.Source.Allowed() {
+		if !validInteractiveThread(thread) {
 			continue
 		}
 		sessionID := safeSessionID(thread.SessionID)
-		if sessionID == "" || thread.CreatedAt < 0 || thread.UpdatedAt < 0 ||
-			thread.CreatedAt > 32_503_680_000 || thread.UpdatedAt > 32_503_680_000 ||
-			(thread.CreatedAt != 0 && thread.UpdatedAt != 0 && thread.UpdatedAt < thread.CreatedAt) {
-			continue
-		}
 		name := ""
 		if thread.Name != nil {
 			name = *thread.Name
@@ -108,7 +103,7 @@ func sanitizeRuntimeThreads(response codex.ThreadListResponse) []model.RuntimeTh
 		// Only top-level interactive chats become dashboard rows. Spawned
 		// agent threads share the parent's hook session and would otherwise
 		// multiply one chat into several identical entries.
-		if thread.ParentThreadID != nil || !thread.Source.Allowed() {
+		if !validInteractiveThread(thread) {
 			continue
 		}
 		running := false
@@ -123,11 +118,6 @@ func sanitizeRuntimeThreads(response codex.ThreadListResponse) []model.RuntimeTh
 			continue
 		}
 		sessionID := safeSessionID(thread.SessionID)
-		if sessionID == "" || thread.CreatedAt < 0 || thread.UpdatedAt < 0 ||
-			thread.CreatedAt > 32_503_680_000 || thread.UpdatedAt > 32_503_680_000 ||
-			(thread.CreatedAt != 0 && thread.UpdatedAt != 0 && thread.UpdatedAt < thread.CreatedAt) {
-			continue
-		}
 		name := ""
 		if thread.Name != nil {
 			name = *thread.Name
@@ -154,6 +144,13 @@ func sanitizeRuntimeThreads(response codex.ThreadListResponse) []model.RuntimeTh
 		}
 	}
 	return result
+}
+
+func validInteractiveThread(thread codex.Thread) bool {
+	return thread.ParentThreadID == nil && thread.Source.Allowed() &&
+		safeSessionID(thread.SessionID) != "" && thread.CreatedAt >= 0 && thread.UpdatedAt >= 0 &&
+		thread.CreatedAt <= 32_503_680_000 && thread.UpdatedAt <= 32_503_680_000 &&
+		(thread.CreatedAt == 0 || thread.UpdatedAt == 0 || thread.UpdatedAt >= thread.CreatedAt)
 }
 
 func safeSessionID(value string) string {

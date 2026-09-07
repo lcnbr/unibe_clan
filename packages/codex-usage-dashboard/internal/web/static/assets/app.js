@@ -700,8 +700,8 @@ function renderUserMapping(accounts) {
   ["Linux user", "OpenAI account", "Role", "Codex version", "State", "Observed"].forEach((label) => {
     const heading = node("th", "", label);
     if (label === "Codex version") {
-      heading.title = "System-managed collector Codex CLI version; not a per-chat client version";
-      heading.setAttribute("aria-label", "System-managed collector Codex CLI version");
+      heading.title = "Last observed Codex CLI version for this Linux user";
+      heading.setAttribute("aria-label", "Last observed per-user Codex CLI version");
     }
     headingRow.append(heading);
   });
@@ -727,9 +727,10 @@ function renderUserMapping(accounts) {
 
     const version = accountLogic.codexVersion(user);
     const versionCell = node("td", version === "—" ? "mapping-version unavailable-value" : "mapping-version", version);
+    const versionObservedAt = user && user.codexVersionObservedAt ? user.codexVersionObservedAt : "";
     versionCell.title = version === "—"
-      ? "System-managed collector Codex CLI version not reported; this is not a per-chat client version"
-      : `System-managed collector Codex CLI ${version}; this is not a per-chat client version`;
+      ? "No per-user Codex CLI version has been observed"
+      : `Last observed Codex CLI for this user: ${version} — ${formatClock(versionObservedAt, false)} (${relativeTime(versionObservedAt)})`;
     versionCell.setAttribute("aria-label", versionCell.title);
     row.append(versionCell);
 

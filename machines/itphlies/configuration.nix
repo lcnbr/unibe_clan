@@ -64,6 +64,14 @@ in {
   boot.initrd.systemd.emergencyAccess = true;
 
   programs.nix-ld.enable = true;
+  services.codexUsageDashboard.codexVersionTargets = {
+    "/nix/store/9cb2ijpwa9hcv8i0qmrxl0pc5731xm9w-codex-0.144.1/bin/codex-raw" = "0.144.1";
+    "/nix/store/awb88965qgvy4yszdd6wwc8qiadpfvmb-codex-0.152.1/bin/codex" = "0.152.1";
+    "/nix/store/d1rizmwbq8fcbv5p6fqb40dzpn3kv4c7-codex-0.153.4/bin/codex" = "0.153.4";
+    "/nix/store/lp8pgfpak48rdgxn3pqgjq51i05kjj7i-codex-0.151.0/bin/.codex-wrapped" = "0.151.0";
+    "/nix/store/ndqxkdiqk3krw0xynw43p09q5mr9csk7-codex-0.152.1/bin/codex" = "0.152.1";
+    "/nix/store/wv1vgl2264lvq80c2zgxqmqbsm07yj8z-codex-0.153.4/bin/codex" = "0.153.4";
+  };
   environment.systemPackages = with pkgs; [
     ipmitool
     # NVIDIA utilities

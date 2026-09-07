@@ -3,10 +3,8 @@ package collector
 import (
 	"context"
 	"errors"
-	"io"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -26,9 +24,6 @@ const (
 	defaultBackoffMax      = 30 * time.Second
 	defaultMaxPayload      = 64 << 10
 	defaultMaxRPCLine      = 1 << 20
-	maxVersionOutputBytes  = 256
-	maxVersionProbeTime    = 2 * time.Second
-	maxVersionProbeCleanup = 250 * time.Millisecond
 )
 
 // Config controls one per-user collector. It contains paths and timings only;
@@ -40,6 +35,9 @@ type Config struct {
 	SocketPath        string
 	AuthPath          string
 	ControlSocketPath string
+	// CodexVersionTargets is an exact full executable path to sanitized version
+	// allowlist. The live detector fails closed when this map is empty.
+	CodexVersionTargets map[string]string
 
 	PollInterval    time.Duration
 	RecycleInterval time.Duration
@@ -72,11 +70,10 @@ type Collector struct {
 
 	start          func(context.Context) (appServer, error)
 	runtimeThreads func(context.Context, string) (codex.ThreadListResponse, error)
-	detectVersion  func(context.Context, string) (string, error)
+	liveVersion    func(context.Context) string
 	publish        func(context.Context, model.Snapshot) error
 	stat           func(string) (authMetadata, error)
 	now            func() time.Time
-	codexVersion   string
 
 	logMu sync.Mutex
 }
@@ -103,6 +100,11 @@ func New(cfg Config) (*Collector, error) {
 	if cfg.ControlSocketPath == "" {
 		cfg.ControlSocketPath = filepath.Join(filepath.Dir(cfg.AuthPath), "app-server-control", "app-server-control.sock")
 	}
+	versionTargets, err := cloneCodexVersionTargets(cfg.CodexVersionTargets)
+	if err != nil {
+		return nil, err
+	}
+	cfg.CodexVersionTargets = versionTargets
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = defaultPollInterval
 	}
@@ -136,7 +138,7 @@ func New(cfg Config) (*Collector, error) {
 
 	c := &Collector{
 		cfg: cfg, stat: statAuthMetadata, now: time.Now,
-		detectVersion: detectCodexVersion,
+		liveVersion: defaultLiveCodexVersionDetector(cfg.CodexVersionTargets),
 	}
 	c.start = func(ctx context.Context) (appServer, error) {
 		return codex.Start(ctx, codex.Config{
@@ -176,10 +178,26 @@ func New(cfg Config) (*Collector, error) {
 	return c, nil
 }
 
+func cloneCodexVersionTargets(targets map[string]string) (map[string]string, error) {
+	if len(targets) == 0 {
+		return nil, nil
+	}
+	cloned := make(map[string]string, len(targets))
+	for target, version := range targets {
+		if target == "" || !filepath.IsAbs(target) || filepath.Clean(target) != target {
+			return nil, errors.New("collector Codex version target must be a clean absolute path")
+		}
+		if version == "" || model.SanitizeCodexVersion(version) != version {
+			return nil, errors.New("collector Codex version target has an invalid version")
+		}
+		cloned[target] = version
+	}
+	return cloned, nil
+}
+
 // Run supervises the app-server process. Expected cancellation is reported as
 // success so systemd can stop the service cleanly.
 func (c *Collector) Run(ctx context.Context) error {
-	c.probeCodexVersion(ctx)
 	backoff := c.cfg.BackoffMin
 	for {
 		if ctx.Err() != nil {
@@ -312,8 +330,9 @@ func (c *Collector) refresh(ctx context.Context, client appServer) (bool, string
 		return false, accountErrorCategory(err)
 	}
 
-	snapshot := snapshotForAccount(c.cfg.Username, c.now().UTC(), account)
-	snapshot.CodexVersion = c.codexVersion
+	observedAt := c.now().UTC()
+	snapshot := snapshotForAccount(c.cfg.Username, observedAt, account)
+	snapshot.CodexVersion, snapshot.CodexVersionObservedAt = c.observeLiveVersion(ctx, observedAt)
 	if snapshot.State == model.StateUnavailable && snapshot.ErrorCategory == model.ErrorProtocol {
 		return false, model.ErrorProtocol
 	}
@@ -389,14 +408,17 @@ func sameChatGPTAccount(response codex.AccountResponse, expectedEmail string) bo
 }
 
 func (c *Collector) publishUnavailable(ctx context.Context, category string) bool {
+	observedAt := c.now().UTC()
+	version, versionObservedAt := c.observeLiveVersion(ctx, observedAt)
 	snapshot := model.Snapshot{
-		SchemaVersion: model.SchemaVersion,
-		Username:      c.cfg.Username,
-		CodexVersion:  c.codexVersion,
-		State:         model.StateUnavailable,
-		Limits:        []model.RateLimit{},
-		ObservedAt:    c.now().UTC(),
-		ErrorCategory: category,
+		SchemaVersion:          model.SchemaVersion,
+		Username:               c.cfg.Username,
+		CodexVersion:           version,
+		CodexVersionObservedAt: versionObservedAt,
+		State:                  model.StateUnavailable,
+		Limits:                 []model.RateLimit{},
+		ObservedAt:             observedAt,
+		ErrorCategory:          category,
 	}
 	publishCtx, cancel := context.WithTimeout(ctx, c.cfg.PublishTimeout)
 	err := c.publish(publishCtx, snapshot)
@@ -409,13 +431,16 @@ func (c *Collector) publishUnavailable(ctx context.Context, category string) boo
 }
 
 func (c *Collector) publishSignedOut(ctx context.Context) bool {
+	observedAt := c.now().UTC()
+	version, versionObservedAt := c.observeLiveVersion(ctx, observedAt)
 	snapshot := model.Snapshot{
-		SchemaVersion: model.SchemaVersion,
-		Username:      c.cfg.Username,
-		CodexVersion:  c.codexVersion,
-		State:         model.StateSignedOut,
-		Limits:        []model.RateLimit{},
-		ObservedAt:    c.now().UTC(),
+		SchemaVersion:          model.SchemaVersion,
+		Username:               c.cfg.Username,
+		CodexVersion:           version,
+		CodexVersionObservedAt: versionObservedAt,
+		State:                  model.StateSignedOut,
+		Limits:                 []model.RateLimit{},
+		ObservedAt:             observedAt,
 	}
 	publishCtx, cancel := context.WithTimeout(ctx, c.cfg.PublishTimeout)
 	err := c.publish(publishCtx, snapshot)
@@ -427,66 +452,16 @@ func (c *Collector) publishSignedOut(ctx context.Context) bool {
 	return true
 }
 
-// probeCodexVersion executes the same configured, pinned CLI path used for
-// the collector's App Server. It runs once per collector process, needs no
-// authentication input, discards stderr, and retains only a short version
-// token from stdout.
-func (c *Collector) probeCodexVersion(ctx context.Context) {
-	timeout := min(c.cfg.RequestTimeout, maxVersionProbeTime)
-	probeCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	version, err := c.detectVersion(probeCtx, c.cfg.CodexPath)
-	if err == nil {
-		c.codexVersion = model.SanitizeCodexVersion(version)
+func (c *Collector) observeLiveVersion(ctx context.Context, observedAt time.Time) (string, *time.Time) {
+	if c.liveVersion == nil {
+		return "", nil
 	}
-}
-
-type boundedVersionOutput struct {
-	bytes    []byte
-	limit    int
-	exceeded bool
-}
-
-func (output *boundedVersionOutput) Write(data []byte) (int, error) {
-	remaining := output.limit - len(output.bytes)
-	if remaining > 0 {
-		amount := min(remaining, len(data))
-		output.bytes = append(output.bytes, data[:amount]...)
-	}
-	if len(data) > remaining {
-		output.exceeded = true
-	}
-	// Always report the full write so os/exec keeps draining a noisy child
-	// without retaining unbounded output in dashboard memory.
-	return len(data), nil
-}
-
-func detectCodexVersion(ctx context.Context, path string) (string, error) {
-	output := boundedVersionOutput{limit: maxVersionOutputBytes}
-	command := exec.CommandContext(ctx, path, "--version")
-	command.Stdout = &output
-	command.Stderr = io.Discard
-	command.WaitDelay = maxVersionProbeCleanup
-	if err := command.Run(); err != nil || output.exceeded {
-		return "", errors.New("codex version probe failed")
-	}
-	return parseCodexVersionOutput(output.bytes)
-}
-
-func parseCodexVersionOutput(output []byte) (string, error) {
-	fields := strings.Fields(string(output))
-	var version string
-	switch {
-	case len(fields) == 2 && (strings.EqualFold(fields[0], "codex-cli") || strings.EqualFold(fields[0], "codex")):
-		version = fields[1]
-	default:
-		return "", errors.New("codex version output is invalid")
-	}
-	version = model.SanitizeCodexVersion(version)
+	version := model.SanitizeCodexVersion(c.liveVersion(ctx))
 	if version == "" {
-		return "", errors.New("codex version output is invalid")
+		return "", nil
 	}
-	return version, nil
+	timestamp := observedAt
+	return version, &timestamp
 }
 
 func (c *Collector) logCategory(category string) {

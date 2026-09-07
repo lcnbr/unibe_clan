@@ -90,6 +90,27 @@ func TestAnchorList(t *testing.T) {
 	}
 }
 
+func TestCodexVersionTargetList(t *testing.T) {
+	targets := codexVersionTargetList{}
+	first := "/nix/store/lp8pgfpak48rdgxn3pqgjq51i05kjj7i-codex-0.151.0/bin/.codex-wrapped=0.151.0"
+	second := "/nix/store/wv1vgl2264lvq80c2zgxqmqbsm07yj8z-codex-0.153.4/bin/codex=0.153.4"
+	if err := targets.Set(second); err != nil {
+		t.Fatal(err)
+	}
+	if err := targets.Set(first); err != nil {
+		t.Fatal(err)
+	}
+	if got := targets.String(); got != first+","+second {
+		t.Fatalf("deterministic targets = %q", got)
+	}
+	if err := targets.Set(first); err == nil {
+		t.Fatal("duplicate target accepted")
+	}
+	if err := targets.Set("missing-separator"); err == nil {
+		t.Fatal("malformed target accepted")
+	}
+}
+
 func TestServeRejectsUnsafeActivityConfigurationBeforeUserLookup(t *testing.T) {
 	tests := []struct {
 		name string

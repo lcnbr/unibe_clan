@@ -45,6 +45,13 @@ func testSnapshot(username string, observedAt time.Time, used int) model.Snapsho
 
 func stringPointer(value string) *string { return &value }
 
+func withCodexVersion(snapshot model.Snapshot, version string) model.Snapshot {
+	observedAt := snapshot.ObservedAt
+	snapshot.CodexVersion = version
+	snapshot.CodexVersionObservedAt = &observedAt
+	return snapshot
+}
+
 func TestApplyRejectsSpoofedUsernameAndRawInvalidData(t *testing.T) {
 	now := time.Now().UTC()
 	state, err := New([]Identity{{Username: "codex", UID: 123}}, time.Minute)
@@ -133,9 +140,8 @@ func TestNonMonotonicSnapshotsCannotRollBackAccountOrHistory(t *testing.T) {
 	state.SetHistory(tracker)
 
 	email := "current@example.com"
-	current := testSnapshot("consumer", observedAt.Add(20*time.Second), 70)
+	current := withCodexVersion(testSnapshot("consumer", observedAt.Add(20*time.Second), 70), "1.2.3")
 	current.Account.Email = &email
-	current.CodexVersion = "1.2.3"
 	if err := state.Apply(124, current); err != nil {
 		t.Fatal(err)
 	}
@@ -162,10 +168,9 @@ func TestNonMonotonicSnapshotsCannotRollBackAccountOrHistory(t *testing.T) {
 		}
 	}
 
-	olderAccount := testSnapshot("consumer", observedAt.Add(10*time.Second), 5)
+	olderAccount := withCodexVersion(testSnapshot("consumer", observedAt.Add(10*time.Second), 5), "0.9.0")
 	olderEmail := "older@example.com"
 	olderAccount.Account.Email = &olderEmail
-	olderAccount.CodexVersion = "0.9.0"
 	if err := state.Apply(124, olderAccount); err != nil {
 		t.Fatalf("older snapshot was not acknowledged: %v", err)
 	}
@@ -235,8 +240,7 @@ func TestUserCodexVersionIsIndependentOfAccountLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	state.now = func() time.Time { return now }
-	healthy := testSnapshot("codex", now, 24)
-	healthy.CodexVersion = "0.149.0"
+	healthy := withCodexVersion(testSnapshot("codex", now, 24), "0.149.0")
 	if err := state.Apply(123, healthy); err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +249,7 @@ func TestUserCodexVersionIsIndependentOfAccountLifecycle(t *testing.T) {
 	}
 
 	// An empty optional field from a transient failure must not erase the last
-	// version successfully measured from this collector's configured binary.
+	// version successfully observed from this user's interactive process.
 	now = now.Add(time.Second)
 	if err := state.Apply(123, model.Snapshot{
 		SchemaVersion: model.SchemaVersion,
@@ -258,16 +262,15 @@ func TestUserCodexVersionIsIndependentOfAccountLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := state.Status().Accounts[0].Users[0].CodexVersion; got != "0.149.0" {
-		t.Fatalf("transient failure erased version: %q", got)
+		t.Fatalf("transient metadata failure erased version: %q", got)
 	}
 
-	// Version follows the Linux collector and updates independently of which
-	// account is selected.
+	// Version follows the Linux user's executable and updates independently of
+	// which account is selected.
 	now = now.Add(time.Second)
-	switched := testSnapshot("codex", now, 10)
+	switched := withCodexVersion(testSnapshot("codex", now, 10), "0.150.0")
 	otherEmail := "other@example.com"
 	switched.Account.Email = &otherEmail
-	switched.CodexVersion = "0.150.0"
 	if err := state.Apply(123, switched); err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +292,7 @@ func TestUserCodexVersionIsIndependentOfAccountLifecycle(t *testing.T) {
 	status = state.Status()
 	if len(status.Accounts) != 0 || len(status.UnassignedUsers) != 1 ||
 		status.UnassignedUsers[0].CodexVersion != "0.150.0" {
-		t.Fatalf("signed-out user lost collector version: %#v", status)
+		t.Fatalf("signed-out user lost session version: %#v", status)
 	}
 }
 

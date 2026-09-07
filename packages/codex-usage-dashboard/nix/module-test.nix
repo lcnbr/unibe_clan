@@ -39,6 +39,100 @@ let
     exit 0
   '';
 
+  fakeHistoricalCodex = pkgs.runCommand "codex-0.148.0" { } ''
+    mkdir -p "$out/bin"
+    touch "$out/bin/codex"
+  '';
+  fakeHistoricalCodexPath = builtins.unsafeDiscardStringContext (toString fakeHistoricalCodex);
+  historicalVersionWithContext = builtins.appendContext "0.148.0" (
+    builtins.getContext (toString fakeHistoricalCodex)
+  );
+  extraCodexVersionTargets = {
+    "${fakeHistoricalCodexPath}/bin/codex" = historicalVersionWithContext;
+  };
+  defaultCodexTarget = "${builtins.unsafeDiscardStringContext (toString pkgs.codex)}/bin/codex";
+
+  validationMachine =
+    codexVersionTargets:
+    lib.nixosSystem {
+      inherit system;
+      modules = [
+        ./module.nix
+        ({ ... }: {
+          system.stateVersion = "26.05";
+          fileSystems."/" = {
+            device = "none";
+            fsType = "tmpfs";
+          };
+          boot.loader.grub = {
+            enable = true;
+            device = "nodev";
+          };
+
+          services.codexUsageDashboard = {
+            enable = true;
+            package = fakeDashboard;
+            users = [ "validation-user" ];
+            inherit codexVersionTargets;
+            tailscale.enable = false;
+          };
+
+          users.users.validation-user = {
+            isNormalUser = true;
+            home = "/home/validation-user";
+          };
+        })
+      ];
+    };
+
+  failedTargetAssertionMessages =
+    codexVersionTargets:
+    map (entry: entry.message) (
+      builtins.filter (
+        entry:
+        !entry.assertion && lib.hasInfix "services.codexUsageDashboard.codexVersionTargets" entry.message
+      ) (validationMachine codexVersionTargets).config.assertions
+    );
+
+  invalidTargetCases = [
+    {
+      targets = {
+        "/nix/store/0000000000000000000000000000000e-codex-0.148.0/bin/codex" = "0.148.0";
+      };
+      expectedMessage = "keys must be clean";
+    }
+    {
+      targets = {
+        "/nix/store/00000000000000000000000000000000-codex-0.148.0/bin/../bin/codex" = "0.148.0";
+      };
+      expectedMessage = "keys must be clean";
+    }
+    {
+      targets = {
+        "/nix/store/00000000000000000000000000000000-codex-0.148.0/bin/codex-helper" = "0.148.0";
+      };
+      expectedMessage = "keys must be clean";
+    }
+    {
+      targets = {
+        "/nix/store/00000000000000000000000000000000-codex-0.148.0/bin/codex" = "0.148.0\n";
+      };
+      expectedMessage = "values must be valid Codex versions";
+    }
+    {
+      targets = {
+        "/nix/store/00000000000000000000000000000000-codex-0.148.0/bin/codex" = "0.149.0";
+      };
+      expectedMessage = "values must match their store-path versions";
+    }
+    {
+      targets = {
+        "${defaultCodexTarget}" = "malformed version";
+      };
+      expectedMessage = "values must be valid Codex versions";
+    }
+  ];
+
   machine = lib.nixosSystem {
     inherit system;
     modules = [
@@ -59,6 +153,7 @@ let
           package = fakeDashboard;
           users = usernames;
           inherit expectedAnchors;
+          codexVersionTargets = extraCodexVersionTargets;
           allowedHosts = [ "itphlies.tailb3264.ts.net" ];
         };
 
@@ -78,6 +173,21 @@ let
     toString cfg.services.codexUsageDashboard.codexPackage
   );
   dashboardPackagePath = builtins.unsafeDiscardStringContext (toString fakeDashboard);
+  expectedCodexVersionTargets = extraCodexVersionTargets // {
+    "${codexPackagePath}/bin/.codex-wrapped" = "0.149.0";
+    "${codexPackagePath}/bin/codex" = "0.149.0";
+    "${codexPackagePath}/bin/codex-raw" = "0.149.0";
+  };
+  expectedHistoricalCodexStoreItem = fakeHistoricalCodexPath;
+  expectedCodexVersionTargetFlags = builtins.unsafeDiscardStringContext (
+    lib.concatMapStringsSep " " (
+      target:
+      lib.escapeShellArgs [
+        "--codex-version-target"
+        "${target}=${expectedCodexVersionTargets.${target}}"
+      ]
+    ) (lib.sort builtins.lessThan (builtins.attrNames expectedCodexVersionTargets))
+  );
   requirements = cfg.environment.etc."codex/requirements.toml";
 
   generatedUnitNames = builtins.attrNames (
@@ -214,6 +324,7 @@ let
         && lib.hasInfix "--codex-bin ${codexPackagePath}/bin/codex" unit.serviceConfig.ExecStart
         && lib.hasInfix "--socket /run/codex-usage-dashboard/ingest.sock" unit.serviceConfig.ExecStart
         && lib.hasInfix "--auth-file ${home}/.codex/auth.json" unit.serviceConfig.ExecStart
+        && lib.hasInfix expectedCodexVersionTargetFlags unit.serviceConfig.ExecStart
         && lib.hasInfix "--poll-interval 30s --recycle-interval 5m --stat-interval 5s" unit.serviceConfig.ExecStart
       ) usernames;
       message = "a collector's identity, isolation, network access, or command-line contract changed";
@@ -227,6 +338,24 @@ let
     {
       assertion = builtins.elem cfg.services.codexUsageDashboard.codexPackage cfg.environment.systemPackages;
       message = "the pinned Codex CLI must be installed system-wide";
+    }
+    {
+      assertion = cfg.services.codexUsageDashboard.codexVersionTargets == extraCodexVersionTargets;
+      message = "the explicit Codex version target registry changed";
+    }
+    {
+      assertion = builtins.any (
+        dependency:
+        toString dependency == expectedHistoricalCodexStoreItem
+        && builtins.getContext (toString dependency) == builtins.getContext (toString fakeHistoricalCodex)
+      ) cfg.system.extraDependencies;
+      message = "historical Codex target packages must remain rooted in the system closure";
+    }
+    {
+      assertion = builtins.all (
+        case: builtins.any (lib.hasInfix case.expectedMessage) (failedTargetAssertionMessages case.targets)
+      ) invalidTargetCases;
+      message = "invalid Codex version target paths or versions must fail module assertions";
     }
     {
       assertion = cfg.services.tailscale.enable;

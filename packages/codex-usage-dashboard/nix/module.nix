@@ -36,7 +36,67 @@ let
 
   dashboardBin = "${cfg.package}/bin/codex-usage-dashboard";
   codexBin = "${cfg.codexPackage}/bin/codex";
+  codexPackagePath = builtins.unsafeDiscardStringContext (toString cfg.codexPackage);
   anchorUsers = builtins.attrNames cfg.expectedAnchors;
+  codexVersionPattern = "dev|[0-9]{1,6}\\.[0-9]{1,6}\\.[0-9]{1,6}(-[0-9A-Za-z][0-9A-Za-z._-]{0,31})?(\\+[0-9A-Za-z][0-9A-Za-z._-]{0,31})?";
+  codexVersionTargetPattern = "(/nix/store/[0123456789abcdfghijklmnpqrsvwxyz]{32}-codex-(${codexVersionPattern}))/bin/(codex|codex-raw|\\.codex-wrapped)";
+  validCodexVersion =
+    version: builtins.stringLength version <= 64 && builtins.match codexVersionPattern version != null;
+  codexVersionTargetMatch = target: builtins.match codexVersionTargetPattern target;
+  validCodexVersionTargetPath =
+    target:
+    let
+      matched = codexVersionTargetMatch target;
+    in
+    matched != null && validCodexVersion (builtins.elemAt matched 1);
+  codexVersionTargetMatches =
+    targets: target:
+    let
+      matched = codexVersionTargetMatch target;
+    in
+    matched != null && builtins.elemAt matched 1 == targets.${target};
+  # Attribute names cannot retain Nix string context. Restore an opaque store
+  # path context so every administrator-registered historical package remains
+  # in the system closure even after its user profile generation is collected.
+  # A caller may retain derivation context on the version value when the target
+  # is produced in the same pure evaluation (as the module test does).
+  configuredCodexVersionTargetDependencies = unique (
+    builtins.filter (dependency: dependency != null) (
+      map (
+        target:
+        let
+          matched = codexVersionTargetMatch target;
+          versionContext = builtins.getContext cfg.codexVersionTargets.${target};
+          storeItem = if matched == null then null else builtins.elemAt matched 0;
+          dependencyContext =
+            if versionContext != { } then
+              versionContext
+            else
+              {
+                "${storeItem}" = {
+                  path = true;
+                };
+              };
+        in
+        if storeItem == null then null else builtins.appendContext storeItem dependencyContext
+      ) (builtins.attrNames cfg.codexVersionTargets)
+    )
+  );
+  defaultCodexVersionTargets = builtins.listToAttrs (
+    map (executable: nameValuePair "${codexPackagePath}/bin/${executable}" cfg.expectedCodexVersion) [
+      "codex"
+      "codex-raw"
+      ".codex-wrapped"
+    ]
+  );
+  codexVersionTargetSets = [
+    cfg.codexVersionTargets
+    defaultCodexVersionTargets
+  ];
+  effectiveCodexVersionTargets = cfg.codexVersionTargets // defaultCodexVersionTargets;
+  codexVersionTargetPaths = lib.sort builtins.lessThan (
+    builtins.attrNames effectiveCodexVersionTargets
+  );
 
   hookCommand = escapeShellArgs [
     dashboardBin
@@ -146,24 +206,32 @@ let
 
   collectorCommand =
     user:
-    escapeShellArgs [
-      dashboardBin
-      "collector"
-      "--username"
-      user
-      "--codex-bin"
-      codexBin
-      "--socket"
-      cfg.socket
-      "--auth-file"
-      "${codexHome user}/auth.json"
-      "--poll-interval"
-      "30s"
-      "--recycle-interval"
-      "5m"
-      "--stat-interval"
-      "5s"
-    ];
+    escapeShellArgs (
+      [
+        dashboardBin
+        "collector"
+        "--username"
+        user
+        "--codex-bin"
+        codexBin
+        "--socket"
+        cfg.socket
+        "--auth-file"
+        "${codexHome user}/auth.json"
+      ]
+      ++ concatMap (target: [
+        "--codex-version-target"
+        "${target}=${effectiveCodexVersionTargets.${target}}"
+      ]) codexVersionTargetPaths
+      ++ [
+        "--poll-interval"
+        "30s"
+        "--recycle-interval"
+        "5m"
+        "--stat-interval"
+        "5s"
+      ]
+    );
 
   prepareHomeCommand =
     user:
@@ -347,6 +415,17 @@ in
       '';
     };
 
+    codexVersionTargets = mkOption {
+      type = types.attrsOf types.str;
+      default = { };
+      description = ''
+        Additional exact immutable Nix-store Codex executable paths mapped to
+        their CLI versions. These root-owned entries are the only live-process
+        targets collectors trust; the configured codexPackage's three possible
+        executable names are included automatically.
+      '';
+    };
+
     tailscale.enable = mkOption {
       type = types.bool;
       default = true;
@@ -432,6 +511,28 @@ in
             app-server compatibility tests pass
           '';
         }
+        {
+          assertion = builtins.all (
+            targets: builtins.all validCodexVersionTargetPath (builtins.attrNames targets)
+          ) codexVersionTargetSets;
+          message = ''
+            services.codexUsageDashboard.codexVersionTargets keys must be clean
+            /nix/store/<hash>-codex-<version>/bin/{codex,codex-raw,.codex-wrapped}
+            paths with a supported embedded version
+          '';
+        }
+        {
+          assertion = builtins.all (
+            targets: builtins.all validCodexVersion (builtins.attrValues targets)
+          ) codexVersionTargetSets;
+          message = "services.codexUsageDashboard.codexVersionTargets values must be valid Codex versions";
+        }
+        {
+          assertion = builtins.all (
+            targets: builtins.all (codexVersionTargetMatches targets) (builtins.attrNames targets)
+          ) codexVersionTargetSets;
+          message = "services.codexUsageDashboard.codexVersionTargets values must match their store-path versions";
+        }
       ];
 
       users.groups.${ingestGroup}.members = cfg.users;
@@ -446,6 +547,8 @@ in
       # Keep the compatibility-tested Codex executable available for both the
       # collectors and interactive `sudo -iu <user> codex login` sessions.
       environment.systemPackages = [ cfg.codexPackage ];
+
+      system.extraDependencies = configuredCodexVersionTargetDependencies;
 
       # Codex loads Unix-wide admin requirements from this fixed location.
       # The hooks forward their JSON event on stdin to a peer-UID-authenticated

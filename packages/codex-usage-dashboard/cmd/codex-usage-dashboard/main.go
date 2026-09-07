@@ -153,6 +153,35 @@ func (values *anchorList) Set(value string) error {
 	return nil
 }
 
+type codexVersionTargetList map[string]string
+
+func (values *codexVersionTargetList) String() string {
+	if values == nil || len(*values) == 0 {
+		return ""
+	}
+	entries := make([]string, 0, len(*values))
+	for target, targetVersion := range *values {
+		entries = append(entries, target+"="+targetVersion)
+	}
+	sort.Strings(entries)
+	return strings.Join(entries, ",")
+}
+
+func (values *codexVersionTargetList) Set(value string) error {
+	parts := strings.SplitN(value, "=", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" || value != strings.TrimSpace(value) {
+		return errors.New("Codex version target must use absolute-path=version")
+	}
+	if *values == nil {
+		*values = make(codexVersionTargetList)
+	}
+	if _, exists := (*values)[parts[0]]; exists {
+		return errors.New("Codex version target path is repeated")
+	}
+	(*values)[parts[0]] = parts[1]
+	return nil
+}
+
 func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -396,6 +425,8 @@ func runCollector(ctx context.Context, args []string, stderr io.Writer) error {
 	requestTimeout := flags.Duration("request-timeout", 10*time.Second, "app-server request timeout")
 	publishTimeout := flags.Duration("publish-timeout", 5*time.Second, "Unix socket publish timeout")
 	maxPayload := flags.Int("max-payload", 64<<10, "maximum snapshot size in bytes")
+	versionTargets := codexVersionTargetList{}
+	flags.Var(&versionTargets, "codex-version-target", "trusted Codex executable as absolute-path=version (repeatable)")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -407,17 +438,18 @@ func runCollector(ctx context.Context, args []string, stderr io.Writer) error {
 	}
 	logger := log.New(stderr, "", log.LstdFlags|log.LUTC)
 	instance, err := collector.New(collector.Config{
-		Username:        *username,
-		CodexPath:       *codexPath,
-		SocketPath:      *socketPath,
-		AuthPath:        *authPath,
-		PollInterval:    *pollInterval,
-		RecycleInterval: *recycleInterval,
-		StatInterval:    *statInterval,
-		RequestTimeout:  *requestTimeout,
-		PublishTimeout:  *publishTimeout,
-		MaxPayload:      *maxPayload,
-		Logger:          logger,
+		Username:            *username,
+		CodexPath:           *codexPath,
+		SocketPath:          *socketPath,
+		AuthPath:            *authPath,
+		CodexVersionTargets: map[string]string(versionTargets),
+		PollInterval:        *pollInterval,
+		RecycleInterval:     *recycleInterval,
+		StatInterval:        *statInterval,
+		RequestTimeout:      *requestTimeout,
+		PublishTimeout:      *publishTimeout,
+		MaxPayload:          *maxPayload,
+		Logger:              logger,
 	})
 	if err != nil {
 		return err

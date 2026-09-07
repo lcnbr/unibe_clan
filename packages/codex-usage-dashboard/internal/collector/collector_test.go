@@ -9,7 +9,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -115,76 +114,40 @@ func testCollector(t *testing.T) *Collector {
 	c.stat = func(string) (authMetadata, error) {
 		return authMetadata{Known: true, Exists: true}, nil
 	}
-	c.codexVersion = "0.149.0-test"
-	c.detectVersion = func(context.Context, string) (string, error) {
-		return "0.149.0-test", nil
-	}
+	c.liveVersion = func(context.Context) string { return "" }
 	return c
 }
 
-func TestParseCodexVersionOutputAcceptsOnlyVersionToken(t *testing.T) {
-	for input, want := range map[string]string{
-		"codex-cli 0.149.0\n":       "0.149.0",
-		"CODEX-CLI 0.150.0-alpha.1": "0.150.0-alpha.1",
-		"codex 0.151.0+build_2":     "0.151.0+build_2",
+func TestCollectorClonesAndValidatesCodexVersionTargets(t *testing.T) {
+	target := "/nix/store/lp8pgfpak48rdgxn3pqgjq51i05kjj7i-codex-0.151.0/bin/.codex-wrapped"
+	configured := map[string]string{target: "0.151.0"}
+	c, err := New(Config{
+		Username: "codex", SocketPath: "/run/test.sock", AuthPath: "/home/codex/.codex/auth.json",
+		CodexVersionTargets: configured,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	configured[target] = "9.9.9"
+	if got := c.cfg.CodexVersionTargets[target]; got != "0.151.0" {
+		t.Fatalf("collector retained mutable caller map: %q", got)
+	}
+
+	for _, invalid := range []map[string]string{
+		{"relative/codex": "0.151.0"},
+		{"/nix/store/../codex": "0.151.0"},
+		{target: "0.151.0\nprivate"},
 	} {
-		got, err := parseCodexVersionOutput([]byte(input))
-		if err != nil || got != want {
-			t.Fatalf("parseCodexVersionOutput(%q) = (%q, %v), want %q", input, got, err, want)
-		}
-	}
-	for _, input := range []string{
-		"", "other-product 0.149.0", "codex-cli", "codex-cli 0.149.0 extra",
-		"codex-cli ../../private", "codex-cli 0.149.0\nsecret",
-		"codex-cli " + strings.Repeat("1", model.MaxCodexVersionBytes+1),
-	} {
-		if got, err := parseCodexVersionOutput([]byte(input)); err == nil || got != "" {
-			t.Fatalf("unsafe output %q parsed as (%q, %v)", input, got, err)
+		if _, err := New(Config{
+			Username: "codex", SocketPath: "/run/test.sock", AuthPath: "/home/codex/.codex/auth.json",
+			CodexVersionTargets: invalid,
+		}); err == nil {
+			t.Fatalf("invalid version targets accepted: %#v", invalid)
 		}
 	}
 }
 
-func TestVersionProbeOutputCaptureIsStrictlyBounded(t *testing.T) {
-	output := boundedVersionOutput{limit: 4}
-	input := []byte("0123456789")
-	written, err := output.Write(input)
-	if err != nil || written != len(input) {
-		t.Fatalf("bounded write = (%d, %v), want (%d, nil)", written, err, len(input))
-	}
-	if got := string(output.bytes); got != "0123" || !output.exceeded {
-		t.Fatalf("bounded capture = bytes:%q exceeded:%v", got, output.exceeded)
-	}
-	if written, err := output.Write([]byte("more")); err != nil || written != 4 || len(output.bytes) != 4 {
-		t.Fatalf("continued drain = written:%d error:%v retained:%q", written, err, output.bytes)
-	}
-}
-
-func TestVersionProbeUsesConfiguredCodexPathOnce(t *testing.T) {
-	c := testCollector(t)
-	c.cfg.CodexPath = "/nix/store/test-codex/bin/codex"
-	var calls int
-	c.detectVersion = func(_ context.Context, path string) (string, error) {
-		calls++
-		if path != c.cfg.CodexPath {
-			t.Fatalf("version path = %q, want configured path %q", path, c.cfg.CodexPath)
-		}
-		return "0.151.0", nil
-	}
-	c.probeCodexVersion(context.Background())
-	if calls != 1 || c.codexVersion != "0.151.0" {
-		t.Fatalf("version probe = calls:%d version:%q", calls, c.codexVersion)
-	}
-
-	c.detectVersion = func(context.Context, string) (string, error) {
-		return "", errors.New("temporary local failure")
-	}
-	c.probeCodexVersion(context.Background())
-	if c.codexVersion != "0.151.0" {
-		t.Fatalf("failed retry erased known version: %q", c.codexVersion)
-	}
-}
-
-func TestEveryCollectorStateCarriesKnownCodexVersion(t *testing.T) {
+func TestCollectorDoesNotClaimPinnedCLIAsUserVersionWithoutLiveProcess(t *testing.T) {
 	c := testCollector(t)
 	fake := newFakeAppServer()
 	published := make([]model.Snapshot, 0, 3)
@@ -201,12 +164,33 @@ func TestEveryCollectorStateCarriesKnownCodexVersion(t *testing.T) {
 		t.Fatalf("published %d snapshots, want 3", len(published))
 	}
 	for _, snapshot := range published {
-		if snapshot.CodexVersion != c.codexVersion {
-			t.Fatalf("%s snapshot version = %q, want %q", snapshot.State, snapshot.CodexVersion, c.codexVersion)
+		if snapshot.CodexVersion != "" || snapshot.CodexVersionObservedAt != nil {
+			t.Fatalf("%s snapshot claimed version evidence without a live process: %#v", snapshot.State, snapshot)
 		}
 		if err := snapshot.Validate(); err != nil {
 			t.Fatalf("%s snapshot validation: %v", snapshot.State, err)
 		}
+	}
+}
+
+func TestLiveCodexVersionCarriesItsExactObservationTime(t *testing.T) {
+	c := testCollector(t)
+	now := time.Date(2026, time.September, 7, 10, 0, 0, 0, time.UTC)
+	c.now = func() time.Time { return now }
+	c.liveVersion = func(context.Context) string { return "0.153.4" }
+	fake := newFakeAppServer()
+	var published model.Snapshot
+	c.publish = func(_ context.Context, snapshot model.Snapshot) error {
+		published = snapshot
+		return nil
+	}
+
+	if ok, category := c.refresh(context.Background(), fake); !ok || category != "" {
+		t.Fatalf("refresh = (%v, %q)", ok, category)
+	}
+	if published.CodexVersion != "0.153.4" || published.CodexVersionObservedAt == nil ||
+		!published.CodexVersionObservedAt.Equal(now) {
+		t.Fatalf("live version observation = %#v", published)
 	}
 }
 
@@ -479,7 +463,7 @@ func TestRefreshPublishesAllowlistedLifetimeAndThreadMetadata(t *testing.T) {
 	if !published.LifetimeTokensRead || published.LifetimeTokens == nil ||
 		*published.LifetimeTokens != lifetime || !published.RecentThreadsRead ||
 		len(published.RecentThreads) != 1 || published.RecentThreads[0].ThreadID != "session-safe-id" ||
-		published.RecentThreads[0].TaskName != "Fix dashboard now" {
+		published.RecentThreads[0].TaskName != "Fix dashboard now" || published.CodexVersion != "" {
 		t.Fatalf("optional allowlist snapshot: %#v", published)
 	}
 }
@@ -494,9 +478,6 @@ func TestAuthMetadataChangeRecyclesChild(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
-	}
-	c.detectVersion = func(context.Context, string) (string, error) {
-		return "0.149.0-test", nil
 	}
 	var starts atomic.Int32
 	c.start = func(context.Context) (appServer, error) {

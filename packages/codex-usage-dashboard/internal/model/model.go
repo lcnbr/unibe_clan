@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -86,22 +87,23 @@ type RateLimit struct {
 }
 
 type Snapshot struct {
-	SchemaVersion         int             `json:"schemaVersion"`
-	Username              string          `json:"username"`
-	CodexVersion          string          `json:"codexVersion,omitempty"`
-	State                 State           `json:"state"`
-	Account               *Account        `json:"account,omitempty"`
-	MainUsage             *Window         `json:"mainUsage,omitempty"`
-	ResetCreditsAvailable *int64          `json:"resetCreditsAvailable,omitempty"`
-	LifetimeTokens        *int64          `json:"lifetimeTokens,omitempty"`
-	LifetimeTokensRead    bool            `json:"lifetimeTokensRead,omitempty"`
-	Limits                []RateLimit     `json:"limits"`
-	RecentThreads         []RecentThread  `json:"recentThreads,omitempty"`
-	RecentThreadsRead     bool            `json:"recentThreadsRead,omitempty"`
-	RuntimeThreads        []RuntimeThread `json:"runtimeThreads,omitempty"`
-	RuntimeThreadsRead    bool            `json:"runtimeThreadsRead,omitempty"`
-	ObservedAt            time.Time       `json:"observedAt"`
-	ErrorCategory         string          `json:"errorCategory,omitempty"`
+	SchemaVersion          int             `json:"schemaVersion"`
+	Username               string          `json:"username"`
+	CodexVersion           string          `json:"codexVersion,omitempty"`
+	CodexVersionObservedAt *time.Time      `json:"codexVersionObservedAt,omitempty"`
+	State                  State           `json:"state"`
+	Account                *Account        `json:"account,omitempty"`
+	MainUsage              *Window         `json:"mainUsage,omitempty"`
+	ResetCreditsAvailable  *int64          `json:"resetCreditsAvailable,omitempty"`
+	LifetimeTokens         *int64          `json:"lifetimeTokens,omitempty"`
+	LifetimeTokensRead     bool            `json:"lifetimeTokensRead,omitempty"`
+	Limits                 []RateLimit     `json:"limits"`
+	RecentThreads          []RecentThread  `json:"recentThreads,omitempty"`
+	RecentThreadsRead      bool            `json:"recentThreadsRead,omitempty"`
+	RuntimeThreads         []RuntimeThread `json:"runtimeThreads,omitempty"`
+	RuntimeThreadsRead     bool            `json:"runtimeThreadsRead,omitempty"`
+	ObservedAt             time.Time       `json:"observedAt"`
+	ErrorCategory          string          `json:"errorCategory,omitempty"`
 }
 
 // RecentThread is collector-private metadata used to turn an opaque hook
@@ -146,13 +148,14 @@ const (
 )
 
 type UserStatus struct {
-	Username     string     `json:"username"`
-	CodexVersion string     `json:"codexVersion,omitempty"`
-	State        State      `json:"state"`
-	Role         UserRole   `json:"role"`
-	LastSeenAt   time.Time  `json:"lastSeenAt"`
-	LastGoodAt   *time.Time `json:"lastGoodAt,omitempty"`
-	Stale        bool       `json:"stale"`
+	Username               string     `json:"username"`
+	CodexVersion           string     `json:"codexVersion,omitempty"`
+	CodexVersionObservedAt *time.Time `json:"codexVersionObservedAt,omitempty"`
+	State                  State      `json:"state"`
+	Role                   UserRole   `json:"role"`
+	LastSeenAt             time.Time  `json:"lastSeenAt"`
+	LastGoodAt             *time.Time `json:"lastGoodAt,omitempty"`
+	Stale                  bool       `json:"stale"`
 }
 
 type ActiveChat struct {
@@ -203,6 +206,10 @@ var allowedErrors = map[string]bool{
 	ErrorPublish:           true,
 }
 
+var codexVersionPattern = regexp.MustCompile(
+	`^(?:dev|[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}(?:-[0-9A-Za-z][0-9A-Za-z._-]{0,31})?(?:\+[0-9A-Za-z][0-9A-Za-z._-]{0,31})?)$`,
+)
+
 func (s *Snapshot) Normalize() {
 	s.SchemaVersion = SchemaVersion
 	normalizeWindow(s.MainUsage)
@@ -245,6 +252,17 @@ func (s Snapshot) Validate() error {
 	}
 	if s.CodexVersion != SanitizeCodexVersion(s.CodexVersion) {
 		return errors.New("invalid Codex version")
+	}
+	if s.CodexVersion == "" && s.CodexVersionObservedAt != nil {
+		return errors.New("Codex version timestamp requires a version")
+	}
+	if s.CodexVersion != "" {
+		if s.CodexVersionObservedAt == nil || s.CodexVersionObservedAt.IsZero() {
+			return errors.New("Codex version requires an observation timestamp")
+		}
+		if !s.CodexVersionObservedAt.Equal(s.ObservedAt) {
+			return errors.New("Codex version timestamp must match the collector observation")
+		}
 	}
 	switch s.State {
 	case StateOK, StateSignedOut, StateAPIKey, StateUnavailable:
@@ -396,19 +414,12 @@ func (s Snapshot) Validate() error {
 	return nil
 }
 
-// SanitizeCodexVersion accepts only the bounded single-token version emitted
-// by `codex --version`. Product names, paths, terminal escapes, and arbitrary
-// subprocess output are deliberately excluded from collector snapshots.
+// SanitizeCodexVersion accepts only a bounded single-token CLI version.
+// Product names, paths, terminal escapes, and arbitrary text are deliberately
+// excluded from collector snapshots and activity observations.
 func SanitizeCodexVersion(value string) string {
-	if value == "" || value != strings.TrimSpace(value) || len(value) > MaxCodexVersionBytes {
-		return ""
-	}
-	for _, char := range value {
-		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
-			(char >= '0' && char <= '9') || char == '.' || char == '-' ||
-			char == '+' || char == '_' {
-			continue
-		}
+	if value == "" || value != strings.TrimSpace(value) || len(value) > MaxCodexVersionBytes ||
+		!codexVersionPattern.MatchString(value) {
 		return ""
 	}
 	return value

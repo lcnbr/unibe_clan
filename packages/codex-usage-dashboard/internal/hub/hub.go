@@ -42,6 +42,7 @@ type entry struct {
 	lifetimeTokens *int64
 	lifetimeAt     time.Time
 	codexVersion   string
+	codexVersionAt time.Time
 	recentThreads  map[string]model.RecentThread
 	runtimeThreads map[string]model.RuntimeThread
 	// runtimeQuarantine contains private App Server thread IDs which were
@@ -277,11 +278,13 @@ func (h *Hub) Apply(uid uint32, incoming model.Snapshot) error {
 		h.mu.Unlock()
 		return nil
 	}
-	if incoming.CodexVersion != "" {
-		// The CLI version belongs to the Linux collector, not an account. Keep
-		// the last successfully reported value across account changes, sign-out,
-		// and transient failures whose version probe may be unavailable.
+	if incoming.CodexVersion != "" && incoming.CodexVersionObservedAt != nil &&
+		(stored.codexVersionAt.IsZero() || incoming.CodexVersionObservedAt.After(stored.codexVersionAt)) {
+		// The CLI version belongs to the Linux user, not an account. Keep the
+		// newest exact process observation across account changes, sign-out, and
+		// transient process-discovery failures.
 		stored.codexVersion = incoming.CodexVersion
+		stored.codexVersionAt = incoming.CodexVersionObservedAt.UTC()
 	}
 	priorAccount := snapshotAccountKeyFromPointer(stored.lastGood)
 	newAccount := ""
@@ -1032,14 +1035,22 @@ func withinInt64Tolerance(left, right, tolerance int64) bool {
 }
 
 func userStatus(stored entry, now time.Time, staleAfter time.Duration) model.UserStatus {
+	version := stored.codexVersion
+	versionAt := stored.codexVersionAt
+	var versionObservedAt *time.Time
+	if version != "" && !versionAt.IsZero() {
+		value := versionAt.UTC()
+		versionObservedAt = &value
+	}
 	return model.UserStatus{
-		Username:     stored.identity.Username,
-		CodexVersion: stored.codexVersion,
-		State:        stored.current.State,
-		Role:         roleFor(stored.identity),
-		LastSeenAt:   stored.lastSeenAt,
-		LastGoodAt:   cloneTime(stored.lastGoodAt),
-		Stale:        entryStale(stored, now, staleAfter),
+		Username:               stored.identity.Username,
+		CodexVersion:           version,
+		CodexVersionObservedAt: versionObservedAt,
+		State:                  stored.current.State,
+		Role:                   roleFor(stored.identity),
+		LastSeenAt:             stored.lastSeenAt,
+		LastGoodAt:             cloneTime(stored.lastGoodAt),
+		Stale:                  entryStale(stored, now, staleAfter),
 	}
 }
 
@@ -1278,6 +1289,7 @@ func cloneSnapshot(value model.Snapshot) model.Snapshot {
 	value.MainUsage = cloneWindow(value.MainUsage)
 	value.ResetCreditsAvailable = cloneInt64(value.ResetCreditsAvailable)
 	value.LifetimeTokens = cloneInt64(value.LifetimeTokens)
+	value.CodexVersionObservedAt = cloneTime(value.CodexVersionObservedAt)
 	value.Limits = cloneLimits(value.Limits)
 	if value.RecentThreads != nil {
 		value.RecentThreads = append([]model.RecentThread(nil), value.RecentThreads...)

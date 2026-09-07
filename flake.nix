@@ -117,19 +117,29 @@
         system,
         ...
       }: {
-        packages = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
-          codex-usage-dashboard =
-            pkgs.callPackage ./packages/codex-usage-dashboard/package.nix {};
-        };
+        packages = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
+          {
+            codex-usage-dashboard =
+              pkgs.callPackage ./packages/codex-usage-dashboard/package.nix {};
+          }
+          // lib.optionalAttrs (system == "x86_64-linux") {
+            codex-cli = pkgs.callPackage ./home-manager/codex/package.nix {};
+          }
+        );
 
-        checks = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
-          codex-usage-dashboard =
-            pkgs.callPackage ./packages/codex-usage-dashboard/package.nix {};
-          codex-usage-dashboard-module = import ./packages/codex-usage-dashboard/nix/module-test.nix {
-            nixpkgs = inputs.nixpkgs;
-            inherit system;
-          };
-        };
+        checks = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
+          {
+            codex-usage-dashboard =
+              pkgs.callPackage ./packages/codex-usage-dashboard/package.nix {};
+            codex-usage-dashboard-module = import ./packages/codex-usage-dashboard/nix/module-test.nix {
+              nixpkgs = inputs.nixpkgs;
+              inherit system;
+            };
+          }
+          // lib.optionalAttrs (system == "x86_64-linux") {
+            codex-cli = pkgs.callPackage ./home-manager/codex/package.nix {};
+          }
+        );
 
         devShells.default = pkgs.mkShell {
           packages = [

@@ -2,10 +2,19 @@
   config,
   lib,
   pkgs,
+  utils,
   ...
 }: let
   userData = import config.unibe.userListFile;
   dummyUserNames = map (index: "codex-dummy-${toString index}") (lib.range 0 3);
+  codexUserNames =
+    [
+      "codex"
+      "codex-1"
+      "codex-2"
+      "codex-3"
+    ]
+    ++ dummyUserNames;
 in {
   imports = [
     # contains your disk format and partitioning configuration.
@@ -31,10 +40,36 @@ in {
       openssh.authorizedKeys.keys = userSpec.sshKeys or [];
       # Anchor accounts are reachable only through an administrator's
       # `sudo -iu`; they have neither a usable password nor SSH keys.
-      hashedPassword = if builtins.elem userName dummyUserNames then "!" else null;
+      hashedPassword =
+        if builtins.elem userName dummyUserNames
+        then "!"
+        else null;
     });
 
   users.groups = userData.groups;
+
+  # These account workers intentionally share one centrally managed Home
+  # Manager module. Their usernames and home paths are the only per-user
+  # values; the installed package set and Codex build are identical.
+  home-manager = {
+    useGlobalPkgs = true;
+    backupFileExtension = "before-codex-unification";
+    users = lib.genAttrs codexUserNames (userName: {
+      imports = [../../home-manager/codex/home.nix];
+      _module.args.codexUsername = userName;
+    });
+  };
+
+  # The per-user ZFS datasets are mounted by an imperative oneshot rather than
+  # ordinary *.mount units. Do not let Home Manager activate into the parent
+  # filesystem if that preparation has not completed successfully.
+  systemd.services =
+    lib.genAttrs (
+      map (userName: "home-manager-${utils.escapeSystemdPath userName}") codexUserNames
+    ) (_: {
+      after = ["zfs-user-datasets.service"];
+      requires = ["zfs-user-datasets.service"];
+    });
 
   services.openssh.enable = true;
   services.openssh.settings.PasswordAuthentication = false;
@@ -65,6 +100,7 @@ in {
 
   programs.nix-ld.enable = true;
   services.codexUsageDashboard.codexVersionTargets = {
+    "/nix/store/al1ya5a2myhlvrwrgsiws3gyr621wa32-codex-0.149.0/bin/codex" = "0.149.0";
     "/nix/store/9cb2ijpwa9hcv8i0qmrxl0pc5731xm9w-codex-0.144.1/bin/codex-raw" = "0.144.1";
     "/nix/store/awb88965qgvy4yszdd6wwc8qiadpfvmb-codex-0.152.1/bin/codex" = "0.152.1";
     "/nix/store/d1rizmwbq8fcbv5p6fqb40dzpn3kv4c7-codex-0.153.4/bin/codex" = "0.153.4";

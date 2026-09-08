@@ -33,6 +33,8 @@
             codex-dummy-1 = "localunitarity+1@gmail.com";
             codex-dummy-2 = "localunitarity+2@gmail.com";
             codex-dummy-3 = "localunitarity+3@gmail.com";
+            codex-dummy-4 = "localunitarity+4@gmail.com";
+            codex-dummy-5 = "localunitarity+5@gmail.com";
           };
           # Per-user child datasets are created and mounted by this host's
           # ZFS management unit. Prepare `.codex` only after it completes.

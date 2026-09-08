@@ -7,4 +7,6 @@
   "codex-dummy-1"
   "codex-dummy-2"
   "codex-dummy-3"
+  "codex-dummy-4"
+  "codex-dummy-5"
 ]

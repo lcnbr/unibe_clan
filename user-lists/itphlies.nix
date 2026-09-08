@@ -34,6 +34,22 @@ let
       extraGroups = [ ];
       sshKeys = [ ];
     }
+    {
+      name = "codex-dummy-4";
+      uid = 1131;
+      isNormalUser = true;
+      shell = "/run/current-system/sw/bin/fish";
+      extraGroups = [ ];
+      sshKeys = [ ];
+    }
+    {
+      name = "codex-dummy-5";
+      uid = 1132;
+      isNormalUser = true;
+      shell = "/run/current-system/sw/bin/fish";
+      extraGroups = [ ];
+      sshKeys = [ ];
+    }
   ];
 in
 shared

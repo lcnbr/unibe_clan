@@ -26,6 +26,8 @@ let
     "codex-dummy-1"
     "codex-dummy-2"
     "codex-dummy-3"
+    "codex-dummy-4"
+    "codex-dummy-5"
   ];
 
   expectedAnchors = {
@@ -33,6 +35,8 @@ let
     codex-dummy-1 = "localunitarity+1@gmail.com";
     codex-dummy-2 = "localunitarity+2@gmail.com";
     codex-dummy-3 = "localunitarity+3@gmail.com";
+    codex-dummy-4 = "localunitarity+4@gmail.com";
+    codex-dummy-5 = "localunitarity+5@gmail.com";
   };
 
   fakeDashboard = pkgs.writeShellScriptBin "codex-usage-dashboard" ''
@@ -204,7 +208,7 @@ let
     }
     {
       assertion = generatedUnitNames == expectedUnitNames;
-      message = "the dashboard and 21 explicit collector units must be generated";
+      message = "the dashboard and 23 explicit collector units must be generated";
     }
     {
       assertion =

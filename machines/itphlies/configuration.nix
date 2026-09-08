@@ -6,7 +6,7 @@
   ...
 }: let
   userData = import config.unibe.userListFile;
-  dummyUserNames = map (index: "codex-dummy-${toString index}") (lib.range 0 3);
+  dummyUserNames = map (index: "codex-dummy-${toString index}") (lib.range 0 5);
   codexUserNames =
     [
       "codex"

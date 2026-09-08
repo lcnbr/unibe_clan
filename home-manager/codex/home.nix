@@ -55,7 +55,7 @@ in {
   assertions = [
     {
       assertion = builtins.elem codexUsername allowedUsernames;
-      message = "the shared Codex home module may only be used by its eight fixed itphlies users";
+      message = "the shared Codex home module may only be used by its ten fixed itphlies users";
     }
   ];
 

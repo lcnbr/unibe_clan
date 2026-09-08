@@ -4,8 +4,8 @@ This source is vendored into the Unibe Clan flake. The
 `codex-usage-dashboard` Clan service assigns it to `itphlies`; the
 standalone flake below remains useful for focused development and tests.
 
-A small, local-only dashboard for every normal user on `itphlies`: 21
-collectors after adding the four persistent `codex-dummy-{0..3}` anchor users.
+A small, local-only dashboard for every normal user on `itphlies`: 23
+collectors after adding the six persistent `codex-dummy-{0..5}` anchor users.
 Each collector asks its own `codex app-server` for the signed-in ChatGPT
 account, quota windows, and optional lifetime usage. The dashboard groups those
 snapshots into one row per OpenAI account. It receives allowlisted collector and
@@ -85,7 +85,7 @@ The protocol integration uses the documented `account/read`,
 ## Architecture and trust boundary
 
 ```text
-21 local users ── private app-servers ── ingest.sock ─┐
+23 local users ── private app-servers ── ingest.sock ─┐
                                                      ├─ dashboard ── 127.0.0.1:8787
 Codex clients ── system-managed hooks ─ activity.sock ┘      │
                  (SO_PEERCRED on both sockets)               └─ Tailscale Serve HTTPS
@@ -254,16 +254,16 @@ The root Clan flake registers the `codex-usage-dashboard` service and assigns
 its `server` role only to `itphlies`. An authorized Clan administrator can
 deploy it from a workstation that has the repository's SOPS identity.
 
-The live NSS check on 2026-08-28 found no entries at UIDs 1127–1130 and found
-1126 (`codex-3`) as the highest configured normal-user UID. Re-run that check
-immediately before the first deployment. If any unrelated account now occupies
-the block, stop and move all four declarations to the lowest contiguous free
-block above the current maximum. Before activation, evaluate both machines and
-confirm that `itphlies` has 21 normal users while `itppeach` remains at 17 and
+The live NSS check on 2026-09-08 found no entries at UIDs 1131–1132 and found
+1130 (`codex-dummy-3`) as the highest configured normal-user UID. Re-run that
+check immediately before deployment. If any unrelated account now occupies the
+block, stop and move both declarations to the lowest contiguous free block
+above the current maximum. Before activation, evaluate both machines and
+confirm that `itphlies` has 23 normal users while `itppeach` remains at 17 and
 has no `codex-dummy-*` users:
 
 ```console
-getent passwd 1127 1128 1129 1130
+getent passwd 1131 1132
 nix eval --impure --json \
   path:.#nixosConfigurations.itphlies.config.services.codexUsageDashboard.users
 nix eval --impure --raw \
@@ -350,14 +350,14 @@ test "$(sudo stat -c %Y "$state_dir/history.json" 2>/dev/null || true)" = \
 test "$(sudo stat -c %Y "$state_dir/history-adjustments.json" 2>/dev/null || true)" = \
   "$legacy_adjustment_mtime"
 
-# Verify the dashboard and 21 collectors, then persist this exact candidate.
+# Verify the dashboard and 23 collectors, then persist this exact candidate.
 active_unit_count="$(
   sudo systemctl is-active \
     codex-usage-dashboard.service \
     'codex-usage-collector-*.service' |
     grep -c '^active$'
 )"
-test "$active_unit_count" -eq 22
+test "$active_unit_count" -eq 24
 sudo nixos-rebuild switch --no-reexec --store-path "$system_path"
 test "$(readlink -f /run/current-system)" = "$system_path"
 test "$(readlink -f /nix/var/nix/profiles/system)" = "$system_path"
@@ -374,7 +374,7 @@ Do not substitute a generic `nixos-rebuild --rollback`; it may select a
 different older generation.
 
 Both routes create the dedicated `codex-usage-dashboard` user/group, start the
-read-only web service, start one collector for each of the 21 normal itphlies
+read-only web service, start one collector for each of the 23 normal itphlies
 users, install the pinned Codex CLI system-wide, and install managed hooks at
 `/etc/codex/requirements.toml`. The root flake deliberately leaves Tailscale
 ownership with the existing Clan Tailscale service. A dedicated oneshot waits
@@ -428,6 +428,8 @@ This example collects every already-declared normal user:
       codex-dummy-1 = "localunitarity+1@gmail.com";
       codex-dummy-2 = "localunitarity+2@gmail.com";
       codex-dummy-3 = "localunitarity+3@gmail.com";
+      codex-dummy-4 = "localunitarity+4@gmail.com";
+      codex-dummy-5 = "localunitarity+5@gmail.com";
     };
     listen = "127.0.0.1:8787";
     allowedHosts = [ "<machine>.<tailnet>.ts.net" ];
@@ -452,7 +454,7 @@ sockets, installs the pinned CLI and system-managed hooks, and enables
 `tailscaled`. No separate process manager or manual background command is
 needed for the application.
 
-After the first itphlies activation, authenticate the four anchors
+After the first itphlies activation, authenticate the six anchors
 interactively as their own users, never as root. Complete each device flow with
 the exact expected alias before starting the next one; never copy or commit
 `auth.json`:
@@ -462,11 +464,14 @@ sudo -iu codex-dummy-0 codex login --device-auth
 sudo -iu codex-dummy-1 codex login --device-auth
 sudo -iu codex-dummy-2 codex login --device-auth
 sudo -iu codex-dummy-3 codex login --device-auth
+sudo -iu codex-dummy-4 codex login --device-auth
+sudo -iu codex-dummy-5 codex login --device-auth
 ```
 
 The expected aliases are, in order, `localunitarity@gmail.com`,
-`localunitarity+1@gmail.com`, `localunitarity+2@gmail.com`, and
-`localunitarity+3@gmail.com`. Gmail dots and `+` suffixes are deliberately not
+`localunitarity+1@gmail.com`, `localunitarity+2@gmail.com`,
+`localunitarity+3@gmail.com`, `localunitarity+4@gmail.com`, and
+`localunitarity+5@gmail.com`. Gmail dots and `+` suffixes are deliberately not
 normalized away. Collectors detect file-backed account switches within about
 30 seconds; keyring or other external changes are picked up by the five-minute
 recycle fallback.
@@ -477,7 +482,7 @@ recycle fallback.
 sudo systemctl status 'codex-usage-*'
 test "$(systemctl is-active \
   codex-usage-dashboard.service \
-  'codex-usage-collector-*.service' | grep -c '^active$')" -eq 22
+  'codex-usage-collector-*.service' | grep -c '^active$')" -eq 24
 
 curl --fail --silent http://127.0.0.1:8787/healthz
 curl --fail --silent http://127.0.0.1:8787/api/v1/status |
@@ -502,8 +507,8 @@ Confirm the locked dummy identities, ZFS datasets, managed policy, loopback
 listener, and both socket permissions:
 
 ```console
-getent passwd codex-dummy-0 codex-dummy-1 codex-dummy-2 codex-dummy-3
-for user in codex-dummy-{0..3}; do
+getent passwd codex-dummy-{0..5}
+for user in codex-dummy-{0..5}; do
   groups="$(id -nG "$user" | tr ' ' '\n')"
   grep -qx users <<<"$groups"
   grep -qx codex-usage-dashboard <<<"$groups"
@@ -511,12 +516,14 @@ for user in codex-dummy-{0..3}; do
   test "$(sudo passwd -S "$user" | awk '{print $2}')" = 'L'
   test "$(stat -c '%a %U %G' "/home/$user")" = "755 $user users"
 done
-sudo sshd -T | grep '^denyusers ' | grep -q 'codex-dummy-3'
+sudo sshd -T | grep '^denyusers ' | grep -q 'codex-dummy-5'
 sudo zfs list \
   zroot/local/home/codex-dummy-0 \
   zroot/local/home/codex-dummy-1 \
   zroot/local/home/codex-dummy-2 \
-  zroot/local/home/codex-dummy-3
+  zroot/local/home/codex-dummy-3 \
+  zroot/local/home/codex-dummy-4 \
+  zroot/local/home/codex-dummy-5
 codex --version
 test -r /etc/codex/requirements.toml
 grep -q '^hooks = true$' /etc/codex/requirements.toml
@@ -553,7 +560,9 @@ curl --fail --silent http://127.0.0.1:8787/api/v1/status |
       "localunitarity@gmail.com",
       "localunitarity+1@gmail.com",
       "localunitarity+2@gmail.com",
-      "localunitarity+3@gmail.com"
+      "localunitarity+3@gmail.com",
+      "localunitarity+4@gmail.com",
+      "localunitarity+5@gmail.com"
     ] as $expected |
     all($expected[] as $email;
       any(.accounts[];

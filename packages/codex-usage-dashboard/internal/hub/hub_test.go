@@ -952,18 +952,21 @@ func TestRuntimeDedupeKeyIncludesUsername(t *testing.T) {
 	}
 }
 
-func TestRuntimeActivityClearsOnEveryNonCurrentObservation(t *testing.T) {
+func TestRuntimeActivityRetentionAndClearing(t *testing.T) {
 	for _, test := range []struct {
 		name         string
 		nextSnapshot func(username string, at time.Time) model.Snapshot
 		wantAccounts int
+		wantRuntime  int
+		wantChats    int
+		wantKnown    bool
 	}{
 		{
 			name: "optional read failure",
 			nextSnapshot: func(username string, at time.Time) model.Snapshot {
 				return testSnapshot(username, at, 20)
 			},
-			wantAccounts: 1,
+			wantAccounts: 1, wantRuntime: 1, wantChats: 1, wantKnown: true,
 		},
 		{
 			name: "successful empty read",
@@ -972,7 +975,7 @@ func TestRuntimeActivityClearsOnEveryNonCurrentObservation(t *testing.T) {
 				snapshot.RuntimeThreadsRead = true
 				return snapshot
 			},
-			wantAccounts: 1,
+			wantAccounts: 1, wantKnown: true,
 		},
 		{
 			name: "unavailable collector",
@@ -1030,18 +1033,66 @@ func TestRuntimeActivityClearsOnEveryNonCurrentObservation(t *testing.T) {
 				t.Fatal(err)
 			}
 			status := state.Status()
-			if len(state.entries["consumer"].runtimeThreads) != 0 {
-				t.Fatalf("private runtime cache was retained: %#v", state.entries["consumer"].runtimeThreads)
+			if len(state.entries["consumer"].runtimeThreads) != test.wantRuntime {
+				t.Fatalf("private runtime cache length = %d, want %d: %#v",
+					len(state.entries["consumer"].runtimeThreads), test.wantRuntime,
+					state.entries["consumer"].runtimeThreads)
 			}
 			if len(status.Accounts) != test.wantAccounts {
 				t.Fatalf("accounts after transition = %#v", status.Accounts)
 			}
-			for _, account := range status.Accounts {
-				if len(account.ActiveChats) != 0 {
-					t.Fatalf("runtime activity survived transition: %#v", account.ActiveChats)
+			if test.wantAccounts == 0 {
+				if len(status.UnassignedUsers) != 1 || status.UnassignedUsers[0].ActiveChatsKnown {
+					t.Fatalf("signed-out coverage = %#v", status.UnassignedUsers)
 				}
+				return
+			}
+			if len(status.Accounts[0].ActiveChats) != test.wantChats ||
+				len(status.Accounts[0].Users) != 1 ||
+				status.Accounts[0].Users[0].ActiveChatsKnown != test.wantKnown {
+				t.Fatalf("runtime transition status = %#v", status.Accounts[0])
 			}
 		})
+	}
+}
+
+func TestRuntimeInventoryGraceExpiresIndependentlyOfCollectorFreshness(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	state, err := New([]Identity{{Username: "consumer", UID: 135}}, 10*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.now = func() time.Time { return now }
+	initial := testSnapshot("consumer", now, 19)
+	initial.RuntimeThreadsRead = true
+	initial.RuntimeThreads = []model.RuntimeThread{{
+		ThreadID: "private-runtime", TaskName: "Running task", Running: true,
+	}}
+	if err := state.Apply(135, initial); err != nil {
+		t.Fatal(err)
+	}
+
+	now = now.Add(runtimeInventoryGrace)
+	status := state.Status().Accounts[0]
+	if len(status.ActiveChats) != 1 || !status.Users[0].ActiveChatsKnown {
+		t.Fatalf("runtime inventory expired at the inclusive boundary: %#v", status)
+	}
+
+	now = now.Add(time.Nanosecond)
+	status = state.Status().Accounts[0]
+	if len(status.ActiveChats) != 0 || status.Users[0].ActiveChatsKnown {
+		t.Fatalf("expired runtime inventory remained authoritative: %#v", status)
+	}
+
+	// A fresh quota observation with another optional runtime failure also
+	// releases the expired private cache rather than extending its lifetime.
+	failedRead := testSnapshot("consumer", now, 20)
+	if err := state.Apply(135, failedRead); err != nil {
+		t.Fatal(err)
+	}
+	stored := state.entries["consumer"]
+	if len(stored.runtimeThreads) != 0 || !stored.runtimeInventoryAt.IsZero() {
+		t.Fatalf("expired runtime cache survived a failed refresh: %#v", stored)
 	}
 }
 
@@ -1205,8 +1256,9 @@ func TestRuntimeQuarantineWaitsForCompleteReadAndSurvivesFailures(t *testing.T) 
 	if err := state.Apply(39, firstComplete); err != nil {
 		t.Fatal(err)
 	}
-	if got := state.Status().Accounts[0].ActiveChats; len(got) != 0 {
-		t.Fatalf("first post-boundary observation was exposed: %#v", got)
+	firstStatus := state.Status().Accounts[0]
+	if len(firstStatus.ActiveChats) != 0 || firstStatus.Users[0].ActiveChatsKnown {
+		t.Fatalf("first post-boundary observation was treated as authoritative: %#v", firstStatus)
 	}
 	now = now.Add(time.Second)
 	next := testSnapshot("consumer", now, 13)
@@ -1219,20 +1271,24 @@ func TestRuntimeQuarantineWaitsForCompleteReadAndSurvivesFailures(t *testing.T) 
 	if err := state.Apply(39, next); err != nil {
 		t.Fatal(err)
 	}
-	if got := state.Status().Accounts[0].ActiveChats; len(got) != 1 || got[0].TaskName != "New task" {
-		t.Fatalf("new session was not independently visible: %#v", got)
+	nextStatus := state.Status().Accounts[0]
+	if len(nextStatus.ActiveChats) != 1 || nextStatus.ActiveChats[0].TaskName != "New task" ||
+		nextStatus.Users[0].ActiveChatsKnown {
+		t.Fatalf("quarantined inventory coverage = %#v", nextStatus)
 	}
 
-	// Optional read failure and explicit sign-out clear visible inventory but
-	// cannot retire an existing quarantine. Sign-out still unassigns the user.
+	// An optional read failure briefly retains the last successful visible
+	// inventory and cannot retire an existing quarantine. Explicit sign-out
+	// still clears that inventory and unassigns the user.
 	now = now.Add(time.Second)
 	readFailure := testSnapshot("consumer", now, 14)
 	readFailure.Account.Email = &secondEmail
 	if err := state.Apply(39, readFailure); err != nil {
 		t.Fatal(err)
 	}
-	if len(state.entries["consumer"].runtimeThreads) != 0 ||
-		len(state.entries["consumer"].runtimeQuarantine) != 1 {
+	if len(state.entries["consumer"].runtimeThreads) != 1 ||
+		len(state.entries["consumer"].runtimeQuarantine) != 1 ||
+		state.Status().Accounts[0].Users[0].ActiveChatsKnown {
 		t.Fatalf("optional failure mishandled private runtime state: %#v", state.entries["consumer"])
 	}
 	now = now.Add(time.Second)
@@ -1243,6 +1299,8 @@ func TestRuntimeQuarantineWaitsForCompleteReadAndSurvivesFailures(t *testing.T) 
 		t.Fatal(err)
 	}
 	if got := state.Status(); len(got.Accounts) != 0 || len(got.UnassignedUsers) != 1 ||
+		got.UnassignedUsers[0].ActiveChatsKnown || len(state.entries["consumer"].runtimeThreads) != 0 ||
+		!state.entries["consumer"].runtimeInventoryAt.IsZero() ||
 		len(state.entries["consumer"].runtimeQuarantine) != 1 {
 		t.Fatalf("sign-out broke membership/quarantine semantics: %#v", got)
 	}

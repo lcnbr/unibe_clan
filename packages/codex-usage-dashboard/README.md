@@ -28,7 +28,8 @@ The UI has three coordinated views:
   freshness, and state;
 - a compact one-row-per-Linux-user account mapping with anchor/consumer role,
   the last observed immutable Codex CLI package version, its observation time,
-  freshness, and state; and
+  current active chats or explicit collection coverage, freshness, and state;
+  and
 - a horizontally scrollable weekly timeline with one lane per opaque account,
   anchored next resets, completed reset history, explicitly labelled inferred
   early/new-window reset points, amber server-adjustment markers, and an honest
@@ -37,9 +38,12 @@ The UI has three coordinated views:
 
 The consumer dropdown excludes dummy anchors. Active chats show only currently
 running work as a bounded, sanitized `task name — username`; idle loaded
-sessions remain private and are omitted. Anchors remain visible through anchor
-health instead. A chat disappears on `Stop` or `SessionEnd`, or after 30 minutes
-with no hook event.
+sessions remain private and are omitted. A known-complete scan with no running
+work is shown as zero, while a missing or failed scan is shown as `Unknown` per
+consumer. The account row also shows `Unknown` when no chat is visible and any
+mapped consumer lacks coverage. Anchors remain visible through anchor health
+and use `—` in the per-user chat column, as do unassigned users. A chat
+disappears on `Stop` or `SessionEnd`, or after 30 minutes with no hook event.
 
 Each collector finds the newest-started live Codex process owned by its Linux
 user and reads its immutable Nix-store package metadata without executing the

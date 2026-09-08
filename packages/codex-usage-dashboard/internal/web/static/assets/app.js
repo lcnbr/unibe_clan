@@ -597,17 +597,25 @@ function renderAccountSummary(accounts) {
     row.append(usersCell);
 
     const chatsCell = node("td", "chats-cell");
-    const chats = accountLogic.accountChats(account);
-    if (chats.length === 0) {
-      chatsCell.append(node("span", "unavailable-value", "—"));
-    } else {
+    const chatStatus = accountLogic.accountChatStatus(account);
+    if (chatStatus.kind === "active") {
       appendDisclosure(
         chatsCell,
-        accountLogic.chatStateSummary(chats),
-        chats.map((chat) => `${chat.taskName || "Untitled chat"} — ${chat.username || "unknown"} — updated ${relativeTime(chat.updatedAt)}`),
+        accountLogic.chatStateSummary(chatStatus.chats),
+        chatStatus.chats.map((chat) => `${chat.taskName || "Untitled chat"} — ${chat.username || "unknown"} — updated ${relativeTime(chat.updatedAt)}`),
         "chat-list-item",
         accountLogic.disclosureKey(account, "active-chats"),
       );
+    } else if (chatStatus.kind === "unknown") {
+      const unknown = node("span", "chat-coverage unknown", "Unknown");
+      unknown.title = "At least one consumer did not report active-chat coverage";
+      chatsCell.append(unknown);
+    } else if (chatStatus.kind === "empty") {
+      chatsCell.append(node("span", "chat-coverage", accountLogic.chatStateSummary([])));
+    } else {
+      const unavailable = node("span", "unavailable-value", "—");
+      unavailable.title = "No consumer users are mapped to this account";
+      chatsCell.append(unavailable);
     }
     row.append(chatsCell);
 
@@ -687,6 +695,13 @@ function userStatusPresentation(user) {
 }
 
 function renderUserMapping(accounts) {
+  // Preserve native details state across the frequent whole-table SSE render,
+  // including the interval between a click and its queued toggle event.
+  const focusedDisclosureKey = accountLogic.focusedDisclosureKey(document.activeElement);
+  accountLogic.snapshotDisclosureStates(
+    openDisclosureKeys,
+    userMappingRoot.querySelectorAll("details[data-disclosure-key]"),
+  );
   const unassigned = currentStatus && Array.isArray(currentStatus.unassignedUsers)
     ? currentStatus.unassignedUsers
     : [];
@@ -697,7 +712,7 @@ function renderUserMapping(accounts) {
   const caption = node("caption", "visually-hidden", "Linux users and their current OpenAI account mapping");
   const head = node("thead");
   const headingRow = node("tr");
-  ["Linux user", "OpenAI account", "Role", "Codex version", "State", "Observed"].forEach((label) => {
+  ["Linux user", "OpenAI account", "Role", "Codex version", "Active chats", "State", "Observed"].forEach((label) => {
     const heading = node("th", "", label);
     if (label === "Codex version") {
       heading.title = "Last observed Codex CLI version for this Linux user";
@@ -734,6 +749,31 @@ function renderUserMapping(accounts) {
     versionCell.setAttribute("aria-label", versionCell.title);
     row.append(versionCell);
 
+    const chatsCell = node("td", "mapping-chats");
+    const chatStatus = accountLogic.userChatStatus(assigned ? account : null, user);
+    if (chatStatus.kind === "active") {
+      appendDisclosure(
+        chatsCell,
+        accountLogic.chatStateSummary(chatStatus.chats),
+        chatStatus.chats.map((chat) => `${chat.taskName || "Untitled chat"} — updated ${relativeTime(chat.updatedAt)}`),
+        "chat-list-item",
+        accountLogic.userChatDisclosureKey(account, user),
+      );
+    } else if (chatStatus.kind === "unknown") {
+      const unknown = node("span", "chat-coverage unknown", "Unknown");
+      unknown.title = "This user's collector did not report active-chat coverage";
+      chatsCell.append(unknown);
+    } else if (chatStatus.kind === "empty") {
+      chatsCell.append(node("span", "chat-coverage", accountLogic.chatStateSummary([])));
+    } else {
+      const unavailable = node("span", "unavailable-value", "—");
+      unavailable.title = user && user.role === "anchor"
+        ? "Anchor users do not report active chats"
+        : "Active chats are unavailable without an assigned account";
+      chatsCell.append(unavailable);
+    }
+    row.append(chatsCell);
+
     const presentation = userStatusPresentation(user);
     const stateCell = node("td", "mapping-state");
     stateCell.append(node("span", `status-pill ${presentation.className}`.trim(), presentation.label));
@@ -751,7 +791,7 @@ function renderUserMapping(accounts) {
     const emptyCell = node("td", "empty-cell", localunitarityOnly
       ? "No users mapped to matching localunitarity Gmail accounts"
       : "No users available");
-    emptyCell.colSpan = 6;
+    emptyCell.colSpan = 7;
     emptyRow.append(emptyCell);
     body.append(emptyRow);
   }
@@ -760,6 +800,14 @@ function renderUserMapping(accounts) {
   userMappingRoot.replaceChildren(table);
   userMappingRoot.setAttribute("aria-busy", "false");
   userMappingCount.textContent = `${rows.length} user${rows.length === 1 ? "" : "s"}`;
+  if (focusedDisclosureKey) {
+    const disclosure = Array.from(userMappingRoot.querySelectorAll("details[data-disclosure-key]"))
+      .find((candidate) => candidate.dataset.disclosureKey === focusedDisclosureKey);
+    const summary = disclosure && disclosure.querySelector("summary");
+    if (summary) {
+      summary.focus({ preventScroll: true });
+    }
+  }
 }
 
 function localDayStart(value) {
@@ -1176,7 +1224,13 @@ function acceptStatus(status) {
       resetCreditsAvailable(account),
       account.lifetimeTokens,
       account.anchorHealth,
-      Array.isArray(account.users) ? account.users.map((user) => [user.username, user.state, user.stale, user.codexVersion]) : [],
+      Array.isArray(account.users) ? account.users.map((user) => [
+        user.username,
+        user.state,
+        user.stale,
+        user.codexVersion,
+        user.activeChatsKnown,
+      ]) : [],
       accountLogic.accountChats(account).map((chat) => [chat.taskName, chat.username, chat.startedAt, chat.updatedAt]),
     ];
   }));

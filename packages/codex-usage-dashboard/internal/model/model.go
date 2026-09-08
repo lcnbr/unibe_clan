@@ -151,6 +151,7 @@ type UserStatus struct {
 	Username               string     `json:"username"`
 	CodexVersion           string     `json:"codexVersion,omitempty"`
 	CodexVersionObservedAt *time.Time `json:"codexVersionObservedAt,omitempty"`
+	ActiveChatsKnown       bool       `json:"activeChatsKnown"`
 	State                  State      `json:"state"`
 	Role                   UserRole   `json:"role"`
 	LastSeenAt             time.Time  `json:"lastSeenAt"`

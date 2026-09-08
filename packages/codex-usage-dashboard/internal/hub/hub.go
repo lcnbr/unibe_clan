@@ -13,6 +13,8 @@ import (
 	"codex-usage-dashboard/internal/model"
 )
 
+const runtimeInventoryGrace = 90 * time.Second
+
 type Identity struct {
 	Username      string
 	UID           uint32
@@ -45,6 +47,11 @@ type entry struct {
 	codexVersionAt time.Time
 	recentThreads  map[string]model.RecentThread
 	runtimeThreads map[string]model.RuntimeThread
+	// runtimeInventoryAt is dashboard-owned receipt time for the most recent
+	// successful control-socket inventory. A brief optional read failure may
+	// retain that private inventory, but it is never treated as known beyond
+	// runtimeInventoryGrace.
+	runtimeInventoryAt time.Time
 	// runtimeQuarantine contains private App Server thread IDs which were
 	// present across an account boundary. App Server does not identify the
 	// account that owns a thread, so these IDs stay hidden until a complete
@@ -299,12 +306,21 @@ func (h *Hub) Apply(uid uint32, incoming model.Snapshot) error {
 		activityIDs = h.activitySessionIDsLocked(username)
 	}
 	// Runtime thread identifiers are account- and process-local metadata. Keep
-	// them only in private, in-memory indexes. A successful read is a complete
-	// observation: it can retire quarantined IDs which disappeared. A read at
+	// them only in private, in-memory indexes. Retain the last successful same-
+	// account inventory across only a brief optional control read failure. A
+	// confirmed successful observation, including an empty one, replaces it
+	// immediately; non-OK observations and account switches clear it.
+	retainRuntime := stored.identity.ExpectedEmail == "" &&
+		incoming.State == model.StateOK && !consumerSwitch && !incoming.RuntimeThreadsRead &&
+		runtimeInventoryRecent(stored, now)
+	if !retainRuntime {
+		stored.runtimeThreads = make(map[string]model.RuntimeThread)
+		stored.runtimeInventoryAt = time.Time{}
+	}
+	// A successful read can retire quarantined IDs which disappeared. A read at
 	// an account boundary cannot tell which account owns an already loaded
 	// thread, so every ID in that observation is quarantined. If that boundary
 	// read fails, quarantine the first later complete observation instead.
-	stored.runtimeThreads = make(map[string]model.RuntimeThread)
 	if stored.identity.ExpectedEmail == "" {
 		if incoming.State == model.StateOK && incoming.RuntimeThreadsRead {
 			observed := make(map[string]model.RuntimeThread, len(incoming.RuntimeThreads))
@@ -342,6 +358,9 @@ func (h *Hub) Apply(uid uint32, incoming model.Snapshot) error {
 				if _, quarantined := stored.runtimeQuarantine[sessionID]; !quarantined {
 					stored.runtimeThreads[sessionID] = thread
 				}
+			}
+			if !consumerSwitch {
+				stored.runtimeInventoryAt = now
 			}
 		} else if consumerSwitch {
 			// Optional runtime collection failed at the boundary. Until one
@@ -760,7 +779,8 @@ func (h *Hub) activeChatsLocked(accountKey string, activities []ActivityRef, now
 	for _, username := range h.order {
 		stored := h.entries[username]
 		if stored.identity.ExpectedEmail != "" || stored.membership != accountKey ||
-			stored.current.State != model.StateOK || entryStale(stored, now, h.staleAfter) {
+			stored.current.State != model.StateOK || entryStale(stored, now, h.staleAfter) ||
+			!runtimeInventoryRecent(stored, now) {
 			continue
 		}
 		fallback := stored.current.ObservedAt
@@ -1046,12 +1066,24 @@ func userStatus(stored entry, now time.Time, staleAfter time.Duration) model.Use
 		Username:               stored.identity.Username,
 		CodexVersion:           version,
 		CodexVersionObservedAt: versionObservedAt,
-		State:                  stored.current.State,
-		Role:                   roleFor(stored.identity),
-		LastSeenAt:             stored.lastSeenAt,
-		LastGoodAt:             cloneTime(stored.lastGoodAt),
-		Stale:                  entryStale(stored, now, staleAfter),
+		ActiveChatsKnown: roleFor(stored.identity) == model.UserRoleConsumer &&
+			stored.current.State == model.StateOK && !entryStale(stored, now, staleAfter) &&
+			runtimeInventoryRecent(stored, now) && !stored.runtimeQuarantinePending &&
+			len(stored.runtimeQuarantine) == 0,
+		State:      stored.current.State,
+		Role:       roleFor(stored.identity),
+		LastSeenAt: stored.lastSeenAt,
+		LastGoodAt: cloneTime(stored.lastGoodAt),
+		Stale:      entryStale(stored, now, staleAfter),
 	}
+}
+
+func runtimeInventoryRecent(stored entry, now time.Time) bool {
+	if stored.runtimeInventoryAt.IsZero() {
+		return false
+	}
+	return now.Before(stored.runtimeInventoryAt) ||
+		now.Sub(stored.runtimeInventoryAt) <= runtimeInventoryGrace
 }
 
 func roleFor(identity Identity) model.UserRole {
@@ -1167,6 +1199,7 @@ func (h *Hub) SeedDemo() {
 			SchemaVersion:         model.SchemaVersion,
 			Username:              username,
 			State:                 model.StateOK,
+			RuntimeThreadsRead:    true,
 			Account:               &model.Account{Type: "chatgpt", Email: &email, PlanType: plan},
 			ObservedAt:            base,
 			LifetimeTokens:        &lifetime,

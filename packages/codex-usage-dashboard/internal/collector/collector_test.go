@@ -426,7 +426,7 @@ func TestRefreshPublishesTopLevelRuntimeStatusAndClearsItOnFailure(t *testing.T)
 	}
 }
 
-func TestMissingControlSocketIsConfirmedEmptyRuntimeObservation(t *testing.T) {
+func TestMissingControlSocketIsUnavailableRuntimeObservation(t *testing.T) {
 	c := testCollector(t)
 	fake := newFakeAppServer()
 	var published model.Snapshot
@@ -437,7 +437,7 @@ func TestMissingControlSocketIsConfirmedEmptyRuntimeObservation(t *testing.T) {
 	if ok, category := c.refresh(context.Background(), fake); !ok || category != "" {
 		t.Fatalf("refresh = (%v, %q)", ok, category)
 	}
-	if !published.RuntimeThreadsRead || len(published.RuntimeThreads) != 0 {
+	if published.RuntimeThreadsRead || len(published.RuntimeThreads) != 0 {
 		t.Fatalf("missing control socket = read:%v threads:%#v", published.RuntimeThreadsRead, published.RuntimeThreads)
 	}
 }

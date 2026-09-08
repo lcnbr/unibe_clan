@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"sync"
 	"unicode"
@@ -231,37 +232,89 @@ func (c *Client) Threads(ctx context.Context, limit int) (ThreadListResponse, er
 // LoadedThreads reads metadata for threads already loaded by this App Server.
 // It never resumes, subscribes to, or otherwise loads a thread. The number of
 // metadata reads is strictly bounded independently of the peer's loaded set;
-// limit is applied after rejecting subagents and unusable metadata so those
-// rows cannot hide an interactive session.
+// limit is applied after rejecting subagents and unusable metadata, collapsing
+// duplicate session IDs, and ranking active sessions ahead of idle ones so
+// those rows cannot hide an interactive active session.
 func (c *Client) LoadedThreads(ctx context.Context, limit int) (ThreadListResponse, error) {
 	if limit <= 0 || limit > 64 {
 		limit = 64
 	}
-	loaded, err := c.loadedThreadIDs(ctx, maxLoadedThreadMetadataReads)
-	if err != nil {
-		return ThreadListResponse{}, err
-	}
-	threads := make([]Thread, 0, min(len(loaded.ThreadIDs), limit))
-	selectedSessions := make(map[string]bool, limit)
-	for _, threadID := range loaded.ThreadIDs {
-		thread, err := c.readThreadMetadata(ctx, threadID)
+	for attempt := 0; attempt < 2; attempt++ {
+		loaded, err := c.loadedThreadIDs(ctx, maxLoadedThreadMetadataReads)
 		if err != nil {
 			return ThreadListResponse{}, err
+		}
+		threads, err := c.readLoadedThreadMetadata(ctx, loaded.ThreadIDs)
+		if err == nil {
+			return ThreadListResponse{Threads: selectLoadedThreads(threads, limit)}, nil
+		}
+		var rpcErr *RPCError
+		if attempt != 0 || !errors.As(err, &rpcErr) || ctx.Err() != nil {
+			return ThreadListResponse{}, err
+		}
+		// A loaded thread may be removed between thread/loaded/list and
+		// thread/read. Re-read the complete inventory once instead of
+		// publishing a partial result or guessing which remote RPC codes mean
+		// "not loaded" across Codex versions.
+	}
+	return ThreadListResponse{}, ErrProtocol
+}
+
+func (c *Client) readLoadedThreadMetadata(ctx context.Context, threadIDs []string) ([]Thread, error) {
+	threads := make([]Thread, 0, len(threadIDs))
+	for _, threadID := range threadIDs {
+		thread, err := c.readThreadMetadata(ctx, threadID)
+		if err != nil {
+			return nil, err
 		}
 		if thread.ParentThreadID != nil || !thread.Source.Allowed() ||
 			!validOpaqueID(thread.SessionID) ||
 			(thread.Status.Type != "active" && thread.Status.Type != "idle") {
 			continue
 		}
-		if !selectedSessions[thread.SessionID] {
-			if len(selectedSessions) == limit {
-				continue
-			}
-			selectedSessions[thread.SessionID] = true
-		}
 		threads = append(threads, thread)
 	}
-	return ThreadListResponse{Threads: threads}, nil
+	return threads, nil
+}
+
+func selectLoadedThreads(threads []Thread, limit int) []Thread {
+	bySession := make(map[string]Thread, len(threads))
+	for _, candidate := range threads {
+		current, exists := bySession[candidate.SessionID]
+		if !exists || loadedThreadPreferred(candidate, current) {
+			bySession[candidate.SessionID] = candidate
+		}
+	}
+
+	selected := make([]Thread, 0, len(bySession))
+	for _, thread := range bySession {
+		selected = append(selected, thread)
+	}
+	sort.Slice(selected, func(left, right int) bool {
+		return loadedThreadPreferred(selected[left], selected[right])
+	})
+	if len(selected) > limit {
+		selected = selected[:limit]
+	}
+	return selected
+}
+
+func loadedThreadPreferred(candidate, current Thread) bool {
+	candidateActive := candidate.Status.Type == "active"
+	currentActive := current.Status.Type == "active"
+	if candidateActive != currentActive {
+		return candidateActive
+	}
+	if candidate.UpdatedAt != current.UpdatedAt {
+		return candidate.UpdatedAt > current.UpdatedAt
+	}
+	if candidate.CreatedAt != current.CreatedAt {
+		return candidate.CreatedAt > current.CreatedAt
+	}
+	if candidate.SessionID != current.SessionID {
+		return candidate.SessionID < current.SessionID
+	}
+	return candidate.ID < current.ID
 }
 
 func (c *Client) loadedThreadIDs(ctx context.Context, limit int) (LoadedThreadListResponse, error) {

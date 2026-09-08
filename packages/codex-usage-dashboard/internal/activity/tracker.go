@@ -10,9 +10,14 @@ import (
 )
 
 const (
-	MaxIDLength            = 128
-	MaxActiveChatsPerUser  = 8
-	MaxActiveChats         = 128
+	MaxIDLength = 128
+	// Keep hook-only tracking aligned with the App Server inventory limit. A
+	// user can legitimately have more than eight concurrent root/subagent
+	// sessions, and evicting the ninth made live work disappear from the UI.
+	MaxActiveChatsPerUser = 64
+	// Twenty-three configured collectors can each fill their per-user bound
+	// without global pressure. The map remains strictly bounded in memory.
+	MaxActiveChats         = 2048
 	MaxRunningTurnsPerChat = 32
 )
 

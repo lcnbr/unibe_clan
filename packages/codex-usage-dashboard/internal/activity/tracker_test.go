@@ -258,6 +258,21 @@ func TestTrackerCapacityEvictsIdleBeforeOlderRunningChat(t *testing.T) {
 	}
 }
 
+func TestTrackerKeepsMoreThanEightSimultaneousChats(t *testing.T) {
+	tracker, err := New([]Identity{{Username: "alice", UID: 1001}}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < 9; index++ {
+		if err := tracker.Apply(1001, activityEvent(ActionStart, fmt.Sprintf("session-%03d", index), "turn")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := tracker.ForUsername("alice"); len(got) != 9 {
+		t.Fatalf("simultaneous hook-only chats = %d, want 9", len(got))
+	}
+}
+
 func TestTrackerRunningTurnCapUsesBoundedSaturationLease(t *testing.T) {
 	tracker, err := New([]Identity{{Username: "alice", UID: 1001}}, time.Hour)
 	if err != nil {

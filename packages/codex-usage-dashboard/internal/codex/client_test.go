@@ -176,7 +176,7 @@ func TestResetCreditCountDistinguishesMissingFromZero(t *testing.T) {
 	}
 }
 
-func TestLoadedThreadsScansPastSubagentsAndRequiresSessionMetadata(t *testing.T) {
+func TestLoadedThreadsScansPastSubagentsAndDeduplicatesSessions(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	defer serverConn.Close()
 	client := newClient(clientConn, clientConn, clientConn.Close, 64<<10)
@@ -301,11 +301,222 @@ func TestLoadedThreadsScansPastSubagentsAndRequiresSessionMetadata(t *testing.T)
 	if err != nil {
 		t.Fatalf("LoadedThreads: %v", err)
 	}
-	if len(threads.Threads) != 2 || threads.Threads[0].ID != "root-active" ||
-		threads.Threads[1].ID != "root-idle" ||
+	if len(threads.Threads) != 1 || threads.Threads[0].ID != "root-active" ||
 		threads.Threads[0].SessionID != "shared-session" ||
-		threads.Threads[1].SessionID != "shared-session" {
+		threads.Threads[0].Status.Type != "active" {
 		t.Fatalf("loaded roots = %#v", threads.Threads)
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLoadedThreadsPrioritizesActiveSessionAfterIdleLimit(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer serverConn.Close()
+	client := newClient(clientConn, clientConn, clientConn.Close, 64<<10)
+	defer client.Close()
+
+	serverDone := make(chan error, 1)
+	go func() {
+		scanner := bufio.NewScanner(serverConn)
+		read := func(wantMethod string) (map[string]json.RawMessage, error) {
+			if !scanner.Scan() {
+				return nil, fmt.Errorf("missing %s", wantMethod)
+			}
+			var message map[string]json.RawMessage
+			if err := json.Unmarshal(scanner.Bytes(), &message); err != nil {
+				return nil, err
+			}
+			var method string
+			if err := json.Unmarshal(message["method"], &method); err != nil || method != wantMethod {
+				return nil, fmt.Errorf("method = %q, want %q", method, wantMethod)
+			}
+			return message, nil
+		}
+		respond := func(request map[string]json.RawMessage, result string) error {
+			_, err := serverConn.Write([]byte(`{"id":` + string(request["id"]) + `,"result":` + result + "}\n"))
+			return err
+		}
+
+		first, err := read("thread/loaded/list")
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		idleIDs := make([]string, 64)
+		for index := range idleIDs {
+			idleIDs[index] = fmt.Sprintf("idle-%02d", index)
+		}
+		encodedIdleIDs, _ := json.Marshal(idleIDs)
+		if err := respond(first, `{"data":`+string(encodedIdleIDs)+`,"nextCursor":"after-idle"}`); err != nil {
+			serverDone <- err
+			return
+		}
+
+		second, err := read("thread/loaded/list")
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		var secondParams struct {
+			Cursor *string `json:"cursor"`
+		}
+		if err := json.Unmarshal(second["params"], &secondParams); err != nil ||
+			secondParams.Cursor == nil || *secondParams.Cursor != "after-idle" {
+			serverDone <- fmt.Errorf("second loaded params = %#v (error %v)", secondParams, err)
+			return
+		}
+		if err := respond(second, `{"data":["active-after-limit"],"nextCursor":null}`); err != nil {
+			serverDone <- err
+			return
+		}
+
+		for index, id := range append(idleIDs, "active-after-limit") {
+			request, err := read("thread/read")
+			if err != nil {
+				serverDone <- err
+				return
+			}
+			var params struct {
+				ThreadID string `json:"threadId"`
+			}
+			if err := json.Unmarshal(request["params"], &params); err != nil || params.ThreadID != id {
+				serverDone <- fmt.Errorf("thread/read ID = %q, want %q (error %v)", params.ThreadID, id, err)
+				return
+			}
+			status := "idle"
+			if id == "active-after-limit" {
+				status = "active"
+			}
+			thread := map[string]any{
+				"id": id, "sessionId": "session-" + id, "source": "cli",
+				"name": "Safe", "parentThreadId": nil,
+				"status":    map[string]any{"type": status},
+				"createdAt": index + 1, "updatedAt": index + 1,
+			}
+			encodedThread, _ := json.Marshal(thread)
+			if err := respond(request, `{"thread":`+string(encodedThread)+`}`); err != nil {
+				serverDone <- err
+				return
+			}
+		}
+		serverDone <- nil
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	threads, err := client.LoadedThreads(ctx, 64)
+	if err != nil {
+		t.Fatalf("LoadedThreads: %v", err)
+	}
+	if len(threads.Threads) != 64 {
+		t.Fatalf("loaded thread count = %d, want 64", len(threads.Threads))
+	}
+	if threads.Threads[0].ID != "active-after-limit" || threads.Threads[0].Status.Type != "active" {
+		t.Fatalf("first loaded thread = %#v, want later active thread", threads.Threads[0])
+	}
+	for _, thread := range threads.Threads {
+		if thread.ID == "idle-00" {
+			t.Fatalf("oldest idle thread survived limit: %#v", thread)
+		}
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLoadedThreadsRetriesInventoryWhenThreadDisappears(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer serverConn.Close()
+	client := newClient(clientConn, clientConn, clientConn.Close, 64<<10)
+	defer client.Close()
+
+	serverDone := make(chan error, 1)
+	go func() {
+		scanner := bufio.NewScanner(serverConn)
+		read := func(wantMethod string) (map[string]json.RawMessage, error) {
+			if !scanner.Scan() {
+				return nil, fmt.Errorf("missing %s", wantMethod)
+			}
+			var message map[string]json.RawMessage
+			if err := json.Unmarshal(scanner.Bytes(), &message); err != nil {
+				return nil, err
+			}
+			var method string
+			if err := json.Unmarshal(message["method"], &method); err != nil || method != wantMethod {
+				return nil, fmt.Errorf("method = %q, want %q", method, wantMethod)
+			}
+			return message, nil
+		}
+		respond := func(request map[string]json.RawMessage, result string) error {
+			_, err := serverConn.Write([]byte(`{"id":` + string(request["id"]) + `,"result":` + result + "}\n"))
+			return err
+		}
+
+		firstList, err := read("thread/loaded/list")
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		if err := respond(firstList, `{"data":["disappeared","still-active"],"nextCursor":null}`); err != nil {
+			serverDone <- err
+			return
+		}
+		goneRead, err := read("thread/read")
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		var goneParams struct {
+			ThreadID string `json:"threadId"`
+		}
+		if err := json.Unmarshal(goneRead["params"], &goneParams); err != nil || goneParams.ThreadID != "disappeared" {
+			serverDone <- fmt.Errorf("first thread/read = %#v (error %v)", goneParams, err)
+			return
+		}
+		if _, err := serverConn.Write([]byte(`{"id":` + string(goneRead["id"]) + `,"error":{"code":-32001,"message":"thread no longer loaded"}}` + "\n")); err != nil {
+			serverDone <- err
+			return
+		}
+
+		secondList, err := read("thread/loaded/list")
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		if err := respond(secondList, `{"data":["still-active"],"nextCursor":null}`); err != nil {
+			serverDone <- err
+			return
+		}
+		activeRead, err := read("thread/read")
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		var activeParams struct {
+			ThreadID string `json:"threadId"`
+		}
+		if err := json.Unmarshal(activeRead["params"], &activeParams); err != nil || activeParams.ThreadID != "still-active" {
+			serverDone <- fmt.Errorf("retried thread/read = %#v (error %v)", activeParams, err)
+			return
+		}
+		if err := respond(activeRead, `{"thread":{"id":"still-active","sessionId":"active-session","source":"cli","name":"Still active","parentThreadId":null,"status":{"type":"active"},"createdAt":10,"updatedAt":20}}`); err != nil {
+			serverDone <- err
+			return
+		}
+		serverDone <- nil
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	threads, err := client.LoadedThreads(ctx, 64)
+	if err != nil {
+		t.Fatalf("LoadedThreads: %v", err)
+	}
+	if len(threads.Threads) != 1 || threads.Threads[0].ID != "still-active" ||
+		threads.Threads[0].Status.Type != "active" {
+		t.Fatalf("loaded threads after retry = %#v", threads.Threads)
 	}
 	if err := <-serverDone; err != nil {
 		t.Fatal(err)

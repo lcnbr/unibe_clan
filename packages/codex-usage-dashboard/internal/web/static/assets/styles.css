@@ -679,7 +679,7 @@ h1 {
 
 .user-mapping-table {
   width: 100%;
-  min-width: 820px;
+  min-width: 1120px;
   border-collapse: collapse;
   table-layout: fixed;
 }
@@ -707,8 +707,9 @@ h1 {
 .user-mapping-table thead th:nth-child(2) { width: 280px; }
 .user-mapping-table thead th:nth-child(3) { width: 100px; }
 .user-mapping-table thead th:nth-child(4) { width: 125px; }
-.user-mapping-table thead th:nth-child(5) { width: 110px; }
+.user-mapping-table thead th:nth-child(5) { width: 235px; }
 .user-mapping-table thead th:nth-child(6) { width: 110px; }
+.user-mapping-table thead th:nth-child(7) { width: 110px; }
 
 .user-mapping-table tbody tr:last-child th,
 .user-mapping-table tbody tr:last-child td {
@@ -744,6 +745,17 @@ h1 {
   color: var(--muted);
   font-family: var(--mono);
   font-size: 10px;
+}
+
+.chat-coverage {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.chat-coverage.unknown {
+  color: var(--amber);
 }
 
 .user-mapping-skeleton {

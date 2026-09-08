@@ -103,6 +103,89 @@ test("chat disclosure includes only currently running sessions", () => {
   assert.equal(source.activeChats.length, 4);
 });
 
+test("per-user chat disclosure selects only that user's running chats", () => {
+  const source = {
+    activeChats: [
+      { taskName: "Newest", username: "codex-2", running: true },
+      { taskName: "Other user", username: "codex-10", running: true },
+      { taskName: "Older", username: "codex-2", running: true },
+      { taskName: "Stopped", username: "codex-2", running: false },
+    ],
+  };
+  assert.deepEqual(
+    logic.userChats(source, { username: "codex-2" }).map((chat) => chat.taskName),
+    ["Newest", "Older"],
+  );
+  assert.deepEqual(logic.userChats(source, { username: "codex" }), []);
+  assert.deepEqual(logic.userChats(source, null), []);
+  assert.equal(source.activeChats.length, 4);
+});
+
+test("per-user chat status distinguishes active, empty, unknown, and not applicable", () => {
+  const account = {
+    activeChats: [
+      { taskName: "Running", username: "codex-1", running: true },
+      { taskName: "Idle", username: "codex-2", running: false },
+    ],
+  };
+  assert.deepEqual(logic.userChatStatus(account, {
+    username: "codex-1", role: "consumer", activeChatsKnown: false,
+  }), {
+    kind: "active",
+    chats: [{ taskName: "Running", username: "codex-1", running: true }],
+  });
+  assert.deepEqual(logic.userChatStatus(account, {
+    username: "codex-2", role: "consumer", activeChatsKnown: true,
+  }), { kind: "empty", chats: [] });
+  assert.deepEqual(logic.userChatStatus(account, {
+    username: "codex-3", role: "consumer", activeChatsKnown: false,
+  }), { kind: "unknown", chats: [] });
+  assert.deepEqual(logic.userChatStatus(account, {
+    username: "codex-4", role: "consumer",
+  }), { kind: "unknown", chats: [] });
+  assert.deepEqual(logic.userChatStatus(account, {
+    username: "codex-dummy-0", role: "anchor", activeChatsKnown: false,
+  }), { kind: "not-applicable", chats: [] });
+  assert.deepEqual(logic.userChatStatus(null, {
+    username: "unassigned", role: "consumer", activeChatsKnown: false,
+  }), { kind: "not-applicable", chats: [] });
+});
+
+test("account chat status reports unknown zero when any consumer lacks coverage", () => {
+  assert.deepEqual(logic.accountChatStatus({
+    users: [
+      { username: "codex-1", role: "consumer", activeChatsKnown: true },
+      { username: "codex-2", role: "consumer", activeChatsKnown: false },
+      { username: "codex-dummy-0", role: "anchor", activeChatsKnown: false },
+    ],
+    activeChats: [
+      { taskName: "Idle", username: "codex-1", running: false },
+    ],
+  }), { kind: "unknown", chats: [] });
+  assert.deepEqual(logic.accountChatStatus({
+    users: [
+      { username: "codex-1", role: "consumer", activeChatsKnown: true },
+      { username: "codex-2", role: "consumer", activeChatsKnown: true },
+    ],
+    activeChats: [],
+  }), { kind: "empty", chats: [] });
+  assert.deepEqual(logic.accountChatStatus({
+    users: [{ username: "codex-dummy-0", role: "anchor", activeChatsKnown: false }],
+    activeChats: [],
+  }), { kind: "not-applicable", chats: [] });
+});
+
+test("a running account chat remains visible when another consumer lacks coverage", () => {
+  const running = { taskName: "Running", username: "codex-1", running: true };
+  assert.deepEqual(logic.accountChatStatus({
+    users: [
+      { username: "codex-1", role: "consumer", activeChatsKnown: true },
+      { username: "codex-2", role: "consumer", activeChatsKnown: false },
+    ],
+    activeChats: [running, { taskName: "Idle", username: "codex-2", running: false }],
+  }), { kind: "active", chats: [running] });
+});
+
 test("user mapping includes anchors and consumers, and optionally unassigned users", () => {
   const accounts = [
     {
@@ -148,6 +231,17 @@ test("account disclosure keys remain stable across refreshed account objects", (
   assert.notEqual(logic.disclosureKey(after, "users"), logic.disclosureKey(after, "active-chats"));
   assert.equal(logic.disclosureKey({ accountKey: "" }, "users"), "");
   assert.equal(logic.disclosureKey(after, "unknown"), "");
+});
+
+test("per-user chat disclosure keys are stable, scoped, and blank-safe", () => {
+  const account = { accountKey: "opaque-account-1" };
+  const refreshed = { accountKey: "opaque-account-1" };
+  const key = logic.userChatDisclosureKey(account, { username: "codex-2" });
+  assert.equal(key, "opaque-account-1:user:codex-2:active-chats");
+  assert.equal(logic.userChatDisclosureKey(refreshed, { username: "codex-2" }), key);
+  assert.notEqual(logic.userChatDisclosureKey(account, { username: "codex-10" }), key);
+  assert.equal(logic.userChatDisclosureKey({ accountKey: "" }, { username: "codex-2" }), "");
+  assert.equal(logic.userChatDisclosureKey(account, { username: "" }), "");
 });
 
 test("open disclosure state survives replacement with a refreshed account object", () => {

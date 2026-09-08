@@ -54,6 +54,43 @@
     return chats.filter((chat) => chat && chat.running === true);
   }
 
+  function userChats(account, user) {
+    const username = user && typeof user.username === "string" ? user.username : "";
+    if (!username) {
+      return [];
+    }
+    return accountChats(account).filter((chat) => chat.username === username);
+  }
+
+  function userChatStatus(account, user) {
+    if (!account || !user || user.role === "anchor") {
+      return { kind: "not-applicable", chats: [] };
+    }
+    const chats = userChats(account, user);
+    if (chats.length !== 0) {
+      return { kind: "active", chats };
+    }
+    return {
+      kind: user.activeChatsKnown === true ? "empty" : "unknown",
+      chats,
+    };
+  }
+
+  function accountChatStatus(account) {
+    const chats = accountChats(account);
+    if (chats.length !== 0) {
+      return { kind: "active", chats };
+    }
+    const consumers = consumerUsers(account);
+    if (consumers.length === 0) {
+      return { kind: "not-applicable", chats };
+    }
+    return {
+      kind: consumers.every((user) => user.activeChatsKnown === true) ? "empty" : "unknown",
+      chats,
+    };
+  }
+
   function chatStateSummary(chats) {
     const source = Array.isArray(chats) ? chats : [];
     const running = source.filter((chat) => chat && chat.running === true).length;
@@ -102,6 +139,19 @@
       return "";
     }
     return `${accountKey}:${kind}`;
+  }
+
+  function userChatDisclosureKey(account, user) {
+    const accountKey = account && typeof account.accountKey === "string"
+      ? account.accountKey.trim()
+      : "";
+    const username = user && typeof user.username === "string"
+      ? user.username.trim()
+      : "";
+    if (!accountKey || !username) {
+      return "";
+    }
+    return `${accountKey}:user:${encodeURIComponent(username)}:active-chats`;
   }
 
   function disclosureIsOpen(openKeys, key) {
@@ -328,6 +378,7 @@
   }
 
   return {
+    accountChatStatus,
     accountEmail,
     accountChats,
     accountResetPoints,
@@ -353,5 +404,8 @@
     selectAccounts,
     totalLifetimeTokens,
     userAccountRows,
+    userChatDisclosureKey,
+    userChatStatus,
+    userChats,
   };
 });

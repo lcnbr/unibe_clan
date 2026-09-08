@@ -150,9 +150,11 @@ func New(cfg Config) (*Collector, error) {
 	c.runtimeThreads = func(ctx context.Context, expectedEmail string) (codex.ThreadListResponse, error) {
 		info, err := os.Lstat(cfg.ControlSocketPath)
 		if errors.Is(err, os.ErrNotExist) {
-			// No daemon means there cannot be a loaded or running chat. Treat
-			// that as a confirmed empty observation, not an optional failure.
-			return codex.ThreadListResponse{Threads: []codex.Thread{}}, nil
+			// A missing control socket says only that runtime inventory is not
+			// available. Hook-aware clients may still have running work, and
+			// legacy or already-running clients may not expose a shared daemon at
+			// all, so absence must not be published as an authoritative empty set.
+			return codex.ThreadListResponse{}, codex.ErrClosed
 		}
 		if err != nil || info.Mode()&os.ModeSocket == 0 {
 			return codex.ThreadListResponse{}, codex.ErrClosed

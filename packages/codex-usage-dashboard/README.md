@@ -4,7 +4,7 @@ This source is vendored into the Unibe Clan flake. The
 `codex-usage-dashboard` Clan service assigns it to `itphlies`; the
 standalone flake below remains useful for focused development and tests.
 
-A small, local-only dashboard for every normal user on `itphlies`: 23
+A small dashboard for every normal user on `itphlies`: 23
 collectors after adding the six persistent `codex-dummy-{0..5}` anchor users.
 Each collector asks its own `codex app-server` for the signed-in ChatGPT
 account, quota windows, and optional lifetime usage. The dashboard groups those
@@ -12,9 +12,10 @@ snapshots into one row per OpenAI account. It receives allowlisted collector and
 hook data over separate peer-authenticated Unix sockets and listens only on
 `127.0.0.1:8787`.
 
-Tailscale Serve is the intended HTTPS entry point. There is no LAN listener,
-Funnel configuration, cloud deployment, external JavaScript, analytics, or
-third-party request.
+Tailscale Serve provides the private tailnet HTTPS entry point. A separate
+password-authenticated loopback proxy can be published by Tailscale Funnel on
+port 10000 without changing the private route. There is no LAN listener,
+external JavaScript, analytics, or third-party request from the dashboard.
 
 ## What the dashboard reports
 
@@ -88,7 +89,8 @@ The protocol integration uses the documented `account/read`,
 23 local users ── private app-servers ── ingest.sock ─┐
                                                      ├─ dashboard ── 127.0.0.1:8787
 Codex clients ── system-managed hooks ─ activity.sock ┘      │
-                 (SO_PEERCRED on both sockets)               └─ Tailscale Serve HTTPS
+                 (SO_PEERCRED on both sockets)               ├─ Tailscale Serve :443 (tailnet)
+                                                            └─ nginx :8788 ─ Funnel :10000 (public)
 ```
 
 Collectors run as their corresponding Linux users. Until authentication
@@ -197,13 +199,20 @@ at 16 MiB.
   name; malformed and unrecognized Host values receive HTTP 421, preventing DNS
   rebinding. Responses set a restrictive CSP, defensive browser headers, and
   `Cache-Control: no-store`.
+- The optional public path terminates at a dedicated nginx process bound only
+  to `127.0.0.1:8788`. It rejects unknown Host values before authentication,
+  authenticates every path from a runtime systemd credential, rate-limits
+  requests, disables buffering for SSE, and forwards no client headers other
+  than the canonical Host value. The bcrypt verifier is SOPS-encrypted and
+  never enters the Nix store; the generated plaintext password is retained
+  only as a non-deployed encrypted Clan var.
 - The UI uses embedded assets and DOM `textContent`; account strings are not
   interpreted as markup.
 
-The HTTP application has no separate login. Full emails and quota details are
-therefore visible to local callers and to every tailnet member allowed to
-reach this device's HTTPS port by the tailnet policy. That is an intentional
-trust decision; narrow the tailnet ACL if the audience should be smaller.
+The Go HTTP application has no login of its own. Full emails and quota details
+are visible to local callers and to every tailnet member allowed to reach the
+private HTTPS port by the tailnet policy. The public Funnel route must target
+the authenticated proxy on port 8788, never the application on port 8787.
 
 ## Build and test
 
@@ -638,6 +647,80 @@ curl --connect-timeout 3 http://<lan-ip-of-this-machine>:8787/healthz
 After a reboot, repeat `systemctl status`, `tailscale serve status`, and the
 remote HTTPS health check. Account rows should populate within 60 seconds;
 ordinary rate-limit changes should appear within 30 seconds.
+
+## Password-protected public HTTPS without a custom domain
+
+The itphlies configuration generates a random 48-character password, stores it
+encrypted in Clan vars, deploys only a bcrypt verifier through a systemd
+credential, and starts the authentication proxy on `127.0.0.1:8788`. Retrieve
+the shared credential locally; this command intentionally prints it:
+
+```console
+nix develop path:/common/nix/clan -c \
+  clan vars get itphlies codex-dashboard-public-auth/password
+```
+
+The fixed Basic authentication username is `dashboard`. Browsers cache Basic
+credentials and there is no per-person identity or revocation. If the password
+is disclosed, rotate it for everyone and redeploy:
+
+```console
+nix develop path:/common/nix/clan -c \
+  clan vars generate itphlies \
+    --generator codex-dashboard-public-auth --regenerate
+nix develop path:/common/nix/clan -c \
+  clan machines update itphlies --flake /common/nix/clan
+```
+
+Because Funnel terminates the public connection before nginx, the proxy's
+request and connection limits are intentionally global rather than per-client.
+Sustained abusive traffic can therefore produce HTTP 429 for every public user
+until the shared bucket recovers.
+
+Funnel authorization is deliberately outside the Nix configuration. Before
+starting the public unit, grant the `funnel` node attribute only to the
+itphlies node (currently `100.87.156.102`) in the tailnet policy. Do not grant
+the shared `tag:itppeach`, which is used by multiple machines. Then start the
+preflighted foreground route:
+
+```console
+sudo systemctl start codex-dashboard-public-funnel.service
+```
+
+The preflight skips activation when the node lacks permission and refuses to
+replace an unrelated port-10000 route. The resulting public URL is:
+
+```text
+https://itphlies.tailb3264.ts.net:10000/
+```
+
+Verify that every public path requires authentication, while the original
+tailnet-only route remains unchanged:
+
+```console
+test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+  https://itphlies.tailb3264.ts.net:10000/api/v1/status)" = 401
+curl --fail --user dashboard \
+  https://itphlies.tailb3264.ts.net:10000/healthz
+tailscale serve status --json
+tailscale funnel status --json
+```
+
+`curl --user dashboard` prompts for the password instead of placing it in the
+process argument list. Stop the foreground Funnel session with:
+
+```console
+sudo systemctl stop codex-dashboard-public-funnel.service
+tailscale serve status --json
+```
+
+The foreground route is owned by the running CLI session and disappears when
+that service stops. The unit deliberately never runs `serve ... off`: doing so
+could remove a route owned by another process after a failed preflight.
+
+Never use `serve reset` or `funnel reset`, and never point Funnel directly at
+port 8787. Tailscale Funnel is public, beta, relay-dependent, and subject to
+non-configurable bandwidth limits.
 
 ## Read-only HTTP interface
 

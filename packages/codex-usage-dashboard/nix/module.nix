@@ -309,6 +309,8 @@ let
     };
 in
 {
+  imports = [ ./public-access.nix ];
+
   options.services.codexUsageDashboard = {
     enable = mkEnableOption "the local Codex account usage dashboard";
 
@@ -324,8 +326,8 @@ in
       default = "127.0.0.1:8787";
       description = ''
         Loopback address on which the dashboard HTTP server listens. A
-        non-loopback listener is rejected so Tailscale Serve remains the only
-        remote entry point.
+        non-loopback listener is rejected so remote entry points must use a
+        local authenticated proxy or Tailscale Serve.
       '';
     };
 
@@ -336,7 +338,7 @@ in
         Exact additional HTTP Host names or IP literals accepted by the
         dashboard. The literal loopback IP from listen is always accepted.
         Entries must omit ports and wildcards; add the machine's complete
-        Tailscale DNS name when using Tailscale Serve.
+        Tailscale DNS name when using Tailscale Serve or Funnel.
       '';
     };
 

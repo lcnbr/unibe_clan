@@ -1,7 +1,7 @@
 {...}: {
   _class = "clan.service";
   manifest.name = "codex-usage-dashboard";
-  manifest.description = "Tailnet-only dashboard for isolated local Codex account quotas";
+  manifest.description = "Authenticated dashboard for isolated local Codex account quotas";
   manifest.categories = [
     "Network"
     "System"
@@ -22,6 +22,30 @@
           ../packages/codex-usage-dashboard/nix/module.nix
         ];
 
+        clan.core.vars.generators.codex-dashboard-public-auth = {
+          validation.version = 1;
+          files = {
+            htpasswd = {
+              secret = true;
+              restartUnits = ["codex-dashboard-public-proxy.service"];
+            };
+            password = {
+              secret = true;
+              deploy = false;
+            };
+          };
+          runtimeInputs = [
+            pkgs.apacheHttpd
+            pkgs.openssl
+          ];
+          script = ''
+            password="$(openssl rand -hex 24)"
+            printf '%s\n' "$password" > "$out/password"
+            printf '%s\n' "$password" |
+              htpasswd -niB -C 12 dashboard > "$out/htpasswd"
+          '';
+        };
+
         services.codexUsageDashboard = {
           enable = true;
           package = pkgs.callPackage ../packages/codex-usage-dashboard/package.nix {};
@@ -41,6 +65,15 @@
           homePreparationRequires = ["zfs-user-datasets.service"];
           listen = "127.0.0.1:8787";
           allowedHosts = ["itphlies.tailb3264.ts.net"];
+
+          publicAccess = {
+            enable = true;
+            hostname = "itphlies.tailb3264.ts.net";
+            proxyPort = 8788;
+            funnelPort = 10000;
+            htpasswdFile =
+              config.clan.core.vars.generators.codex-dashboard-public-auth.files.htpasswd.path;
+          };
 
           # Tailscale is already owned by the Clan tailscale service.
           tailscale.enable = false;

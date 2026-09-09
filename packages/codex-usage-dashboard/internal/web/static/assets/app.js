@@ -10,6 +10,7 @@ const USED_PERCENT_DECREASED = "used_percent_decreased";
 const accountsRoot = document.getElementById("accounts");
 const userMappingRoot = document.getElementById("user-mapping");
 const userMappingCount = document.getElementById("user-mapping-count");
+const dummyUserFilter = document.getElementById("dummy-user-filter");
 const timelineRoot = document.getElementById("timeline");
 const trackingCopy = document.getElementById("tracking-copy");
 const adjustmentDetail = document.getElementById("adjustment-detail");
@@ -37,8 +38,11 @@ let latestHistoryRevision = -1;
 let lastAnnouncementSignature = "";
 let knownAdjustmentIDs = null;
 let localunitarityOnly = localunitarityFilter.checked;
+let hideDummyUsers = dummyUserFilter.checked;
 let sortMode = "alphabetical";
 let priorityBasis = (priorityBasisInputs.find((input) => input.checked) || {}).value || "remaining";
+let accountColumnSort = [];
+let userColumnSort = [];
 const openDisclosureKeys = new Set();
 const adjustmentDetailDefault = "";
 
@@ -435,6 +439,181 @@ function appendDisclosure(parent, summaryText, items, itemClass, disclosureKey) 
   parent.append(details);
 }
 
+function focusedSortKey(root) {
+  const active = document.activeElement;
+  if (!active || !root.contains(active) || !active.matches("button[data-sort-key]")) {
+    return "";
+  }
+  return active.dataset.sortKey || "";
+}
+
+function restoreTableFocus(root, disclosureKey, sortKey) {
+  if (disclosureKey) {
+    const disclosure = Array.from(root.querySelectorAll("details[data-disclosure-key]"))
+      .find((candidate) => candidate.dataset.disclosureKey === disclosureKey);
+    const summary = disclosure && disclosure.querySelector("summary");
+    if (summary) {
+      summary.focus({ preventScroll: true });
+      return;
+    }
+  }
+  if (sortKey) {
+    const sortButton = Array.from(root.querySelectorAll("button[data-sort-key]"))
+      .find((candidate) => candidate.dataset.sortKey === sortKey);
+    if (sortButton) {
+      sortButton.focus({ preventScroll: true });
+    }
+  }
+}
+
+function sortDirectionLabel(direction) {
+  return direction === "desc" ? "descending" : "ascending";
+}
+
+function sortableHeading(column, sortStack, onSort) {
+  const heading = node("th", "sortable-column");
+  heading.scope = "col";
+  const priority = accountLogic.columnSortPriority(sortStack, column.key);
+  const descriptor = priority > 0 ? sortStack[priority - 1] : null;
+  const direction = descriptor ? sortDirectionLabel(descriptor.direction) : "";
+  if (priority === 1) {
+    heading.setAttribute("aria-sort", direction);
+    heading.classList.add("is-primary-sort");
+  } else if (priority > 1) {
+    heading.classList.add("is-secondary-sort");
+  }
+
+  const button = node("button", "sort-header-button");
+  button.type = "button";
+  button.dataset.sortKey = column.key;
+  button.append(node("span", "sort-header-label", column.label));
+  if (priority > 0) {
+    const indicatorText = accountLogic.columnSortIndicator(sortStack, column.key) + (priority === 1 ? "1" : "");
+    const indicator = node("span", "sort-indicator", indicatorText);
+    indicator.setAttribute("aria-hidden", "true");
+    button.append(indicator);
+  }
+
+  let currentState = "not currently sorted";
+  let nextAction = "Activate to make this the primary ascending sort";
+  if (priority === 1) {
+    currentState = `primary sort, ${direction}`;
+    nextAction = `Activate to change to ${descriptor.direction === "desc" ? "ascending" : "descending"}`;
+  } else if (priority > 1) {
+    currentState = `sort priority ${priority}, ${direction}`;
+    nextAction = `Activate to make this the primary sort and retain its ${direction} direction`;
+  }
+  button.setAttribute("aria-label", `${column.label}, ${currentState}. ${nextAction}.`);
+  button.title = [column.help, `${currentState}. ${nextAction}.`].filter(Boolean).join(" ");
+  button.addEventListener("click", () => onSort(column.key));
+  heading.append(button);
+  return heading;
+}
+
+function columnSortAnnouncement(tableLabel, columns, sortStack) {
+  const labels = new Map(columns.map((column) => [column.key, column.label]));
+  const description = sortStack.map((descriptor, index) =>
+    `${index === 0 ? "first" : `then ${index + 1}`}: ${labels.get(descriptor.key) || descriptor.key} ${sortDirectionLabel(descriptor.direction)}`,
+  ).join("; ");
+  return `${tableLabel} sorted ${description}.`;
+}
+
+const ACCOUNT_SORT_COLUMNS = [
+  { key: "account", label: "Account" },
+  { key: "plan", label: "Plan" },
+  { key: "usage", label: "Main weekly usage" },
+  { key: "remaining", label: "Remaining" },
+  { key: "reset", label: "Next reset" },
+  { key: "credits", label: "Resets available" },
+  { key: "lifetime", label: "Lifetime tokens (all Codex)" },
+  { key: "users", label: "Users" },
+  { key: "chats", label: "Active chats" },
+  { key: "state", label: "State" },
+  { key: "observed", label: "Observed" },
+];
+
+const USER_SORT_COLUMNS = [
+  { key: "username", label: "Linux user" },
+  { key: "account", label: "OpenAI account" },
+  { key: "role", label: "Role" },
+  { key: "version", label: "Codex version", help: "Last observed Codex CLI version for this Linux user" },
+  { key: "chats", label: "Active chats" },
+  { key: "state", label: "State" },
+  { key: "observed", label: "Observed" },
+];
+
+function finiteNumber(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function naturalCompare(left, right) {
+  return String(left || "").localeCompare(String(right || ""), undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
+}
+
+function accountSortFallback(left, right) {
+  return naturalCompare(left && left.accountKey, right && right.accountKey);
+}
+
+function userSortFallback(left, right) {
+  const usernameDifference = naturalCompare(left && left.user && left.user.username, right && right.user && right.user.username);
+  if (usernameDifference !== 0) {
+    return usernameDifference;
+  }
+  return naturalCompare(left && left.account && left.account.accountKey, right && right.account && right.account.accountKey);
+}
+
+function accountColumnValue(account, key) {
+  const usage = canonicalMainUsage(account);
+  const reset = anchoredReset(account);
+  const chatStatus = accountLogic.accountChatStatus(account);
+  switch (key) {
+    case "account": return accountLabel(account);
+    case "plan": return accountPlan(account) || null;
+    case "usage": return usage ? finiteNumber(usage.usedPercent) : null;
+    case "remaining": return remainingPercent(account);
+    case "reset": return reset ? finiteNumber(reset.resetsAt) : null;
+    case "credits": return resetCreditsAvailable(account);
+    case "lifetime": return finiteNumber(account && account.lifetimeTokens);
+    case "users": return consumerUsers(account).length;
+    case "chats": return chatStatus.kind === "unknown" || chatStatus.kind === "not-applicable"
+      ? null
+      : chatStatus.chats.length;
+    case "state": return statusPresentation(account).label;
+    case "observed": return accountLogic.observedTimestamp(
+      account && account.observedAt,
+      account && account.lastSeenAt,
+    );
+    default: return null;
+  }
+}
+
+function userColumnValue(row, key) {
+  const user = row.user || {};
+  const chatStatus = accountLogic.userChatStatus(row.assigned ? row.account : null, user);
+  switch (key) {
+    case "username": return user.username || null;
+    case "account": return row.assigned ? accountLabel(row.account) : null;
+    case "role": return user.role || "consumer";
+    case "version": {
+      const version = accountLogic.codexVersion(user);
+      return version === "—" ? null : version;
+    }
+    case "chats": return chatStatus.kind === "unknown" || chatStatus.kind === "not-applicable"
+      ? null
+      : chatStatus.chats.length;
+    case "state": return userStatusPresentation(user).label;
+    case "observed": return accountLogic.observedTimestamp(user.lastSeenAt, user.lastGoodAt);
+    default: return null;
+  }
+}
+
 function anchorStatus(account) {
   const anchor = account && account.anchor ? account.anchor : null;
   const status = anchor && anchor.status ? anchor.status : account && account.anchorHealth;
@@ -460,21 +639,29 @@ function renderAccountSummary(accounts) {
   // before replacing the table so a simultaneous SSE refresh cannot fold a
   // disclosure between the user's click and that queued event.
   const focusedDisclosureKey = accountLogic.focusedDisclosureKey(document.activeElement);
+  const focusedHeaderKey = focusedSortKey(accountsRoot);
   accountLogic.snapshotDisclosureStates(
     openDisclosureKeys,
     accountsRoot.querySelectorAll("details[data-disclosure-key]"),
   );
+  const sortedAccounts = accountColumnSort.length === 0
+    ? accounts
+    : accountLogic.sortRowsByColumns(accounts, accountColumnSort, accountColumnValue, accountSortFallback);
   const table = node("table", "account-table");
   const caption = node("caption", "visually-hidden", "Main weekly Codex usage by OpenAI account");
   const head = node("thead");
   const headingRow = node("tr");
-  ["Account", "Plan", "Main weekly usage", "Remaining", "Next reset", "Resets available", "Lifetime tokens (all Codex)", "Users", "Active chats", "State", "Observed"].forEach((label) => {
-    headingRow.append(node("th", "", label));
+  ACCOUNT_SORT_COLUMNS.forEach((column) => {
+    headingRow.append(sortableHeading(column, accountColumnSort, (key) => {
+      accountColumnSort = accountLogic.nextColumnSort(accountColumnSort, key);
+      renderAccountSummary(displayedAccounts());
+      screenReaderStatus.textContent = columnSortAnnouncement("Account overview", ACCOUNT_SORT_COLUMNS, accountColumnSort);
+    }));
   });
   head.append(headingRow);
 
   const body = node("tbody");
-  accounts.forEach((account) => {
+  sortedAccounts.forEach((account) => {
     const row = node("tr");
     if (account.stale) {
       row.classList.add("is-stale");
@@ -624,12 +811,9 @@ function renderAccountSummary(accounts) {
     stateCell.append(node("span", `status-pill ${presentation.className}`.trim(), presentation.label));
     row.append(stateCell);
 
-    const reportedObservedAt = validDate(account.observedAt);
-    const observedValue = reportedObservedAt && reportedObservedAt.getUTCFullYear() > 1
-      ? account.observedAt
-      : account.lastSeenAt;
+    const observedValue = accountLogic.observedTimestamp(account.observedAt, account.lastSeenAt);
     const observedCell = node("td", "observed-cell", relativeTime(observedValue));
-    observedCell.dataset.relativeTime = observedValue || "";
+    observedCell.dataset.relativeTime = observedValue === null ? "" : String(observedValue);
     row.append(observedCell);
     body.append(row);
   });
@@ -668,14 +852,7 @@ function renderAccountSummary(accounts) {
   table.append(caption, head, body, foot);
   accountsRoot.replaceChildren(table);
   accountsRoot.setAttribute("aria-busy", "false");
-  if (focusedDisclosureKey) {
-    const disclosure = Array.from(accountsRoot.querySelectorAll("details[data-disclosure-key]"))
-      .find((candidate) => candidate.dataset.disclosureKey === focusedDisclosureKey);
-    const summary = disclosure && disclosure.querySelector("summary");
-    if (summary) {
-      summary.focus({ preventScroll: true });
-    }
-  }
+  restoreTableFocus(accountsRoot, focusedDisclosureKey, focusedHeaderKey);
 }
 
 function userStatusPresentation(user) {
@@ -698,6 +875,7 @@ function renderUserMapping(accounts) {
   // Preserve native details state across the frequent whole-table SSE render,
   // including the interval between a click and its queued toggle event.
   const focusedDisclosureKey = accountLogic.focusedDisclosureKey(document.activeElement);
+  const focusedHeaderKey = focusedSortKey(userMappingRoot);
   accountLogic.snapshotDisclosureStates(
     openDisclosureKeys,
     userMappingRoot.querySelectorAll("details[data-disclosure-key]"),
@@ -707,18 +885,23 @@ function renderUserMapping(accounts) {
     : [];
   // An unassigned user has no account identity against which the account
   // filter can match, so it appears only in the unfiltered roster.
-  const rows = accountLogic.userAccountRows(accounts, unassigned, !localunitarityOnly);
+  const allRows = accountLogic.userAccountRows(accounts, unassigned, !localunitarityOnly);
+  const unsortedRows = hideDummyUsers
+    ? allRows.filter((row) => !accountLogic.isDummyUsername(row && row.user && row.user.username))
+    : allRows;
+  const rows = userColumnSort.length === 0
+    ? unsortedRows
+    : accountLogic.sortRowsByColumns(unsortedRows, userColumnSort, userColumnValue, userSortFallback);
   const table = node("table", "user-mapping-table");
   const caption = node("caption", "visually-hidden", "Linux users and their current OpenAI account mapping");
   const head = node("thead");
   const headingRow = node("tr");
-  ["Linux user", "OpenAI account", "Role", "Codex version", "Active chats", "State", "Observed"].forEach((label) => {
-    const heading = node("th", "", label);
-    if (label === "Codex version") {
-      heading.title = "Last observed Codex CLI version for this Linux user";
-      heading.setAttribute("aria-label", "Last observed per-user Codex CLI version");
-    }
-    headingRow.append(heading);
+  USER_SORT_COLUMNS.forEach((column) => {
+    headingRow.append(sortableHeading(column, userColumnSort, (key) => {
+      userColumnSort = accountLogic.nextColumnSort(userColumnSort, key);
+      renderUserMapping(displayedAccounts());
+      screenReaderStatus.textContent = columnSortAnnouncement("User to account mapping", USER_SORT_COLUMNS, userColumnSort);
+    }));
   });
   head.append(headingRow);
 
@@ -779,9 +962,9 @@ function renderUserMapping(accounts) {
     stateCell.append(node("span", `status-pill ${presentation.className}`.trim(), presentation.label));
     row.append(stateCell);
 
-    const observedValue = user.lastSeenAt || user.lastGoodAt || "";
+    const observedValue = accountLogic.observedTimestamp(user.lastSeenAt, user.lastGoodAt);
     const observedCell = node("td", "mapping-observed", relativeTime(observedValue));
-    observedCell.dataset.relativeTime = observedValue;
+    observedCell.dataset.relativeTime = observedValue === null ? "" : String(observedValue);
     row.append(observedCell);
     body.append(row);
   });
@@ -800,14 +983,7 @@ function renderUserMapping(accounts) {
   userMappingRoot.replaceChildren(table);
   userMappingRoot.setAttribute("aria-busy", "false");
   userMappingCount.textContent = `${rows.length} user${rows.length === 1 ? "" : "s"}`;
-  if (focusedDisclosureKey) {
-    const disclosure = Array.from(userMappingRoot.querySelectorAll("details[data-disclosure-key]"))
-      .find((candidate) => candidate.dataset.disclosureKey === focusedDisclosureKey);
-    const summary = disclosure && disclosure.querySelector("summary");
-    if (summary) {
-      summary.focus({ preventScroll: true });
-    }
-  }
+  restoreTableFocus(userMappingRoot, focusedDisclosureKey, focusedHeaderKey);
 }
 
 function localDayStart(value) {
@@ -1359,8 +1535,16 @@ localunitarityFilter.addEventListener("change", () => {
     : "All Codex accounts shown."}`;
 });
 
+dummyUserFilter.addEventListener("change", () => {
+  hideDummyUsers = dummyUserFilter.checked;
+  renderUserMapping(displayedAccounts());
+  screenReaderStatus.textContent = `${userMappingCount.textContent}. Dummy users ${hideDummyUsers ? "hidden" : "shown"}.`;
+});
+
 sortModeButton.addEventListener("click", () => {
   sortMode = sortMode === "priority" ? "alphabetical" : "priority";
+  accountColumnSort = [];
+  userColumnSort = [];
   render();
   screenReaderStatus.textContent = sortMode === "priority"
     ? `Priority sorting enabled by ${priorityBasis === "reset" ? "soonest weekly reset" : "most quota remaining"}.`
@@ -1373,6 +1557,8 @@ priorityBasisInputs.forEach((input) => {
       return;
     }
     priorityBasis = input.value === "reset" ? "reset" : "remaining";
+    accountColumnSort = [];
+    userColumnSort = [];
     render();
     screenReaderStatus.textContent = `Priority ordering now uses ${priorityBasis === "reset"
       ? "soonest weekly reset"

@@ -54,8 +54,14 @@
       <section class="dashboard-section" aria-labelledby="user-mapping-heading">
         <header class="section-heading">
           <h2 id="user-mapping-heading">User → account</h2>
-          <div class="view-meta">
-            <span id="user-mapping-count">— users</span>
+          <div class="user-mapping-tools" aria-label="User mapping controls">
+            <label class="filter-toggle">
+              <input id="dummy-user-filter" type="checkbox" checked aria-controls="user-mapping">
+              <span>Hide dummy users</span>
+            </label>
+            <div class="view-meta">
+              <span id="user-mapping-count">— users</span>
+            </div>
           </div>
         </header>
         <div id="user-mapping" class="user-mapping-wrap" role="region" aria-labelledby="user-mapping-heading" aria-busy="true" tabindex="0">

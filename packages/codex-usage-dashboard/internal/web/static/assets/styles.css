@@ -58,6 +58,7 @@ button {
 .sort-controls,
 .priority-basis,
 .filter-toggle,
+.user-mapping-tools,
 .view-meta {
   display: flex;
   align-items: center;
@@ -162,6 +163,12 @@ h1 {
   flex-direction: row;
   flex-wrap: wrap;
   gap: 8px 16px;
+}
+
+.user-mapping-tools {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 16px;
 }
 
 .filter-toggle {
@@ -298,6 +305,7 @@ h1 {
 }
 
 .quiet-button:focus-visible,
+.sort-header-button:focus-visible,
 .filter-toggle input:focus-visible,
 .priority-basis input:focus-visible,
 .cell-disclosure summary:focus-visible,
@@ -306,6 +314,10 @@ h1 {
 .user-mapping-wrap:focus-visible {
   outline: 2px solid var(--blue);
   outline-offset: 3px;
+}
+
+.sort-header-button:focus-visible {
+  outline-offset: -3px;
 }
 
 .timeline-scroll {
@@ -701,6 +713,58 @@ h1 {
   font-weight: 650;
   letter-spacing: .08em;
   text-transform: uppercase;
+}
+
+.user-mapping-table thead th.sortable-column,
+.account-table thead th.sortable-column {
+  padding: 0;
+}
+
+.sort-header-button {
+  width: 100%;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+  padding: 8px 12px;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+  text-transform: inherit;
+  cursor: pointer;
+}
+
+.account-table .sort-header-button {
+  min-height: 40px;
+  padding: 10px 12px;
+}
+
+.sort-header-button:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, .025);
+}
+
+.sortable-column.is-primary-sort {
+  color: var(--text);
+}
+
+.sortable-column.is-secondary-sort {
+  color: #bec4c5;
+}
+
+.sort-header-label {
+  min-width: 0;
+}
+
+.sort-indicator {
+  flex: 0 0 auto;
+  color: var(--lime);
+  font-size: 10px;
+  letter-spacing: 0;
 }
 
 .user-mapping-table thead th:nth-child(1) { width: 160px; }
@@ -1175,7 +1239,8 @@ noscript {
     font-size: 20px;
   }
 
-  .account-tools {
+  .account-tools,
+  .user-mapping-tools {
     width: 100%;
     align-items: flex-start;
   }

@@ -105,6 +105,23 @@
       });
   }
 
+  function isDummyUsername(value) {
+    return typeof value === "string" && /^codex-dummy-\d+$/.test(value);
+  }
+
+  function observedTimestamp(primary, fallback) {
+    for (const value of [primary, fallback]) {
+      if (value === null || value === undefined || value === "") {
+        continue;
+      }
+      const date = new Date(value);
+      if (!Number.isNaN(date.getTime()) && date.getUTCFullYear() > 1) {
+        return date.getTime();
+      }
+    }
+    return null;
+  }
+
   function userAccountRows(accounts, unassignedUsers, includeUnassigned) {
     const rows = [];
     (Array.isArray(accounts) ? accounts : []).forEach((account) => {
@@ -274,6 +291,136 @@
     return direction * (left < right ? -1 : 1);
   }
 
+  function normalizedColumnSort(stack) {
+    const normalized = [];
+    const seen = new Set();
+    (Array.isArray(stack) ? stack : []).forEach((entry) => {
+      const key = entry && typeof entry.key === "string" ? entry.key.trim() : "";
+      if (!key || seen.has(key) || (entry.direction !== "asc" && entry.direction !== "desc")) {
+        return;
+      }
+      seen.add(key);
+      normalized.push({ key, direction: entry.direction });
+    });
+    return normalized;
+  }
+
+  function nextColumnSort(stack, key) {
+    const normalized = normalizedColumnSort(stack);
+    const columnKey = typeof key === "string" ? key.trim() : "";
+    if (!columnKey) {
+      return normalized;
+    }
+    const previousIndex = normalized.findIndex((entry) => entry.key === columnKey);
+    if (previousIndex === 0) {
+      normalized[0] = {
+        key: columnKey,
+        direction: normalized[0].direction === "asc" ? "desc" : "asc",
+      };
+      return normalized;
+    }
+    if (previousIndex > 0) {
+      const [selected] = normalized.splice(previousIndex, 1);
+      normalized.unshift(selected);
+      return normalized;
+    }
+    normalized.unshift({ key: columnKey, direction: "asc" });
+    return normalized;
+  }
+
+  function columnSortPriority(stack, key) {
+    const columnKey = typeof key === "string" ? key.trim() : "";
+    if (!columnKey) {
+      return 0;
+    }
+    const index = normalizedColumnSort(stack).findIndex((entry) => entry.key === columnKey);
+    return index < 0 ? 0 : index + 1;
+  }
+
+  function columnSortIndicator(stack, key) {
+    const priority = columnSortPriority(stack, key);
+    if (priority === 0) {
+      return "";
+    }
+    const entry = normalizedColumnSort(stack)[priority - 1];
+    return `${entry.direction === "asc" ? "↑" : "↓"}${priority === 1 ? "" : priority}`;
+  }
+
+  function normalizedSortValue(value) {
+    if (value === null || value === undefined) {
+      return { missing: true };
+    }
+    if (value instanceof Date) {
+      const timestamp = value.getTime();
+      return Number.isFinite(timestamp)
+        ? { missing: false, type: "number", value: timestamp }
+        : { missing: true };
+    }
+    if (typeof value === "number") {
+      return Number.isFinite(value)
+        ? { missing: false, type: "number", value }
+        : { missing: true };
+    }
+    if (typeof value === "boolean") {
+      return { missing: false, type: "boolean", value };
+    }
+    return { missing: false, type: "string", value: String(value) };
+  }
+
+  function compareColumnValues(left, right, direction) {
+    const normalizedLeft = normalizedSortValue(left);
+    const normalizedRight = normalizedSortValue(right);
+    if (normalizedLeft.missing !== normalizedRight.missing) {
+      return normalizedLeft.missing ? 1 : -1;
+    }
+    if (normalizedLeft.missing) {
+      return 0;
+    }
+    let compared;
+    if (normalizedLeft.type === normalizedRight.type && normalizedLeft.type === "number") {
+      compared = normalizedLeft.value === normalizedRight.value
+        ? 0
+        : (normalizedLeft.value < normalizedRight.value ? -1 : 1);
+    } else if (normalizedLeft.type === normalizedRight.type && normalizedLeft.type === "boolean") {
+      compared = normalizedLeft.value === normalizedRight.value
+        ? 0
+        : (normalizedLeft.value ? 1 : -1);
+    } else {
+      compared = String(normalizedLeft.value).localeCompare(String(normalizedRight.value), undefined, {
+        numeric: true,
+        sensitivity: "base",
+      });
+    }
+    return direction === "desc" ? -compared : compared;
+  }
+
+  function sortRowsByColumns(rows, stack, valueFor, fallbackCompare) {
+    const source = Array.isArray(rows) ? rows : [];
+    const columns = normalizedColumnSort(stack);
+    const resolveValue = typeof valueFor === "function" ? valueFor : () => null;
+    const compareFallback = typeof fallbackCompare === "function" ? fallbackCompare : () => 0;
+    return source
+      .map((row, originalIndex) => ({ row, originalIndex }))
+      .sort((left, right) => {
+        for (const column of columns) {
+          const compared = compareColumnValues(
+            resolveValue(left.row, column.key),
+            resolveValue(right.row, column.key),
+            column.direction,
+          );
+          if (compared !== 0) {
+            return compared;
+          }
+        }
+        const fallback = Number(compareFallback(left.row, right.row));
+        if (Number.isFinite(fallback) && fallback !== 0) {
+          return fallback < 0 ? -1 : 1;
+        }
+        return left.originalIndex - right.originalIndex;
+      })
+      .map((entry) => entry.row);
+  }
+
   function priorityCompare(left, right, basis) {
     const tierDifference = priorityTier(left.facts) - priorityTier(right.facts);
     if (tierDifference !== 0) {
@@ -384,6 +531,8 @@
     accountResetPoints,
     alphabeticalCompare,
     chatStateSummary,
+    columnSortIndicator,
+    columnSortPriority,
     codexVersion,
     compactTokenCount,
     consumerUsers,
@@ -391,7 +540,10 @@
     disclosureIsOpen,
     focusedDisclosureKey,
     historyRetentionDays,
+    isDummyUsername,
     matchesLocalunitarityAccount,
+    nextColumnSort,
+    observedTimestamp,
     priorityCompare,
     priorityTier,
     quotaRemainingLabel,
@@ -402,6 +554,7 @@
     resetPointMatchesAdjustment,
     resetPointMatchesWindow,
     selectAccounts,
+    sortRowsByColumns,
     totalLifetimeTokens,
     userAccountRows,
     userChatDisclosureKey,

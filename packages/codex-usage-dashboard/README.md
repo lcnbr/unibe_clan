@@ -44,6 +44,9 @@ consumer. The account row also shows `Unknown` when no chat is visible and any
 mapped consumer lacks coverage. Anchors remain visible through anchor health
 and use `—` in the per-user chat column, as do unassigned users. A chat
 disappears on `Stop` or `SessionEnd`, or after 30 minutes with no hook event.
+The User → account roster has a default-on **Hide dummy users** toggle which
+hides only exact `codex-dummy-<digits>` usernames. It does not alter account
+rows, account dropdowns, or reset-timeline lanes.
 
 Each collector finds the newest-started live Codex process owned by its Linux
 user and reads its immutable Nix-store package metadata without executing the
@@ -55,13 +58,22 @@ switches and transient failures, but never persisted. Standalone, newly updated,
 or otherwise unregistered installations are shown as unknown rather than
 guessed.
 
-All three views use the same presentation-only account selection and ordering. A
-default-on, case-insensitive `localunitarity*@gmail.com` filter can be disabled
-to reveal every configured account. The sort button toggles alphabetical and
-priority order. Priority puts active Pro windows first, then “starts on next
-use”, then accounts with at least one earned reset credit; within each tier the
-radio choice uses either most remaining weekly quota or the soonest anchored
-weekly reset, with account label and opaque key as deterministic tie-breaks.
+All three views use the same presentation-only account selection and initial
+ordering. A default-on, case-insensitive `localunitarity*@gmail.com` filter can
+be disabled to reveal every configured account. The sort button toggles
+alphabetical and priority order. Priority puts active Pro windows first, then
+“starts on next use”, then accounts with at least one earned reset credit;
+within each tier the radio choice uses either most remaining weekly quota or
+the soonest anchored weekly reset, with account label and opaque key as
+deterministic tie-breaks.
+
+Every Account Overview and User → account column header is also a sort button.
+The newest clicked column becomes the primary key, clicking it again reverses
+its direction, and earlier selections remain numbered lexicographic
+tie-breakers with their remembered directions. These two table-specific sort
+stacks are independent, survive live refreshes and filter changes, and always
+put unavailable values last. Selecting the global alphabetical/priority preset
+clears both stacks; the reset timeline continues to follow that global order.
 
 Spark and every other model-specific bucket are excluded from both views. The
 collector takes main usage only from App Server's authoritative top-level

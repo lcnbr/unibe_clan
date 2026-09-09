@@ -38,6 +38,122 @@ test("selected priority metric orders within tiers with alphabetical ties", () =
   ]);
 });
 
+test("column sort clicks promote new columns and toggle the current primary", () => {
+  let stack = logic.nextColumnSort([], "account");
+  assert.deepEqual(stack, [{ key: "account", direction: "asc" }]);
+
+  stack = logic.nextColumnSort(stack, "remaining");
+  assert.deepEqual(stack, [
+    { key: "remaining", direction: "asc" },
+    { key: "account", direction: "asc" },
+  ]);
+
+  stack = logic.nextColumnSort(stack, "remaining");
+  assert.deepEqual(stack, [
+    { key: "remaining", direction: "desc" },
+    { key: "account", direction: "asc" },
+  ]);
+
+  stack = logic.nextColumnSort(stack, "account");
+  assert.deepEqual(stack, [
+    { key: "account", direction: "asc" },
+    { key: "remaining", direction: "desc" },
+  ]);
+  assert.deepEqual(logic.nextColumnSort(stack, ""), stack);
+});
+
+test("column sort state discards malformed and duplicate descriptors", () => {
+  const source = [
+    { key: " account ", direction: "asc" },
+    { key: "account", direction: "desc" },
+    { key: "remaining", direction: "sideways" },
+    null,
+  ];
+  assert.deepEqual(logic.nextColumnSort(source, "plan"), [
+    { key: "plan", direction: "asc" },
+    { key: "account", direction: "asc" },
+  ]);
+  assert.deepEqual(source[0], { key: " account ", direction: "asc" });
+});
+
+test("column indicators expose direction and lexicographic priority", () => {
+  const stack = [
+    { key: "remaining", direction: "desc" },
+    { key: "account", direction: "asc" },
+    { key: "reset", direction: "desc" },
+  ];
+  assert.equal(logic.columnSortIndicator(stack, "remaining"), "↓");
+  assert.equal(logic.columnSortIndicator(stack, "account"), "↑2");
+  assert.equal(logic.columnSortIndicator(stack, "reset"), "↓3");
+  assert.equal(logic.columnSortIndicator(stack, "unknown"), "");
+  assert.equal(logic.columnSortPriority(stack, "remaining"), 1);
+  assert.equal(logic.columnSortPriority(stack, "account"), 2);
+  assert.equal(logic.columnSortPriority(stack, "unknown"), 0);
+});
+
+test("multi-column row sorting applies remembered columns lexicographically", () => {
+  const rows = [
+    { id: "z", plan: "Pro", remaining: 20, account: "zulu" },
+    { id: "b", plan: "Team", remaining: 80, account: "beta" },
+    { id: "a", plan: "Pro", remaining: 80, account: "alpha" },
+    { id: "c", plan: "Pro", remaining: 80, account: "charlie" },
+  ];
+  const stack = [
+    { key: "plan", direction: "asc" },
+    { key: "remaining", direction: "desc" },
+    { key: "account", direction: "asc" },
+  ];
+  const sorted = logic.sortRowsByColumns(
+    rows,
+    stack,
+    (row, key) => row[key],
+    (left, right) => left.id.localeCompare(right.id),
+  );
+  assert.deepEqual(sorted.map((row) => row.id), ["a", "c", "z", "b"]);
+  assert.deepEqual(rows.map((row) => row.id), ["z", "b", "a", "c"]);
+});
+
+test("multi-column row sorting handles natural strings, dates, booleans, and missing values", () => {
+  const rows = [
+    { id: "missing", version: null, observed: new Date("invalid"), stale: null },
+    { id: "ten", version: "codex-10", observed: new Date("2026-09-10T00:00:00Z"), stale: true },
+    { id: "two", version: "codex-2", observed: new Date("2026-09-02T00:00:00Z"), stale: false },
+  ];
+  assert.deepEqual(logic.sortRowsByColumns(
+    rows,
+    [{ key: "version", direction: "asc" }],
+    (row, key) => row[key],
+    (left, right) => left.id.localeCompare(right.id),
+  ).map((row) => row.id), ["two", "ten", "missing"]);
+  assert.deepEqual(logic.sortRowsByColumns(
+    rows,
+    [{ key: "observed", direction: "desc" }],
+    (row, key) => row[key],
+    (left, right) => left.id.localeCompare(right.id),
+  ).map((row) => row.id), ["ten", "two", "missing"]);
+  assert.deepEqual(logic.sortRowsByColumns(
+    rows,
+    [{ key: "stale", direction: "asc" }],
+    (row, key) => row[key],
+    (left, right) => left.id.localeCompare(right.id),
+  ).map((row) => row.id), ["two", "ten", "missing"]);
+});
+
+test("row sorting uses the ascending fallback and then stable input order", () => {
+  const rows = [
+    { id: "b", value: 1 },
+    { id: "a", value: 1 },
+    { id: "a", value: 1, duplicate: true },
+  ];
+  const sorted = logic.sortRowsByColumns(
+    rows,
+    [{ key: "value", direction: "desc" }],
+    (row, key) => row[key],
+    (left, right) => left.id.localeCompare(right.id),
+  );
+  assert.deepEqual(sorted, [rows[1], rows[2], rows[0]]);
+});
+
 test("precedence tiers win even when the selected metric favors a later tier", () => {
   const entries = [
     { account: account("remainder"), facts: { remainingPercent: 100, nextResetAt: 1 } },
@@ -213,6 +329,43 @@ test("user mapping includes anchors and consumers, and optionally unassigned use
     ["valentin", false],
   ]);
   assert.equal(accounts[0].users[0].username, "codex-10");
+});
+
+test("dummy-user matching accepts only the exact codex-dummy-digits form", () => {
+  assert.equal(logic.isDummyUsername("codex-dummy-0"), true);
+  assert.equal(logic.isDummyUsername("codex-dummy-42"), true);
+  assert.equal(logic.isDummyUsername("codex-dummy-"), false);
+  assert.equal(logic.isDummyUsername("codex-dummy-2-extra"), false);
+  assert.equal(logic.isDummyUsername("Codex-dummy-2"), false);
+  assert.equal(logic.isDummyUsername(" codex-dummy-2"), false);
+  assert.equal(logic.isDummyUsername(null), false);
+});
+
+test("observed timestamps reject Go zero times and use a valid fallback", () => {
+  const fallback = "2026-09-09T12:34:56Z";
+  assert.equal(
+    logic.observedTimestamp("0001-01-01T00:00:00Z", fallback),
+    Date.parse(fallback),
+  );
+  assert.equal(logic.observedTimestamp("0001-01-01T00:00:00Z"), null);
+  assert.equal(logic.observedTimestamp("not-a-date", "0001-01-01T00:00:00Z"), null);
+
+  const rows = [
+    { id: "never", observed: logic.observedTimestamp("0001-01-01T00:00:00Z") },
+    { id: "older", observed: logic.observedTimestamp("2026-09-01T00:00:00Z") },
+    { id: "newer", observed: logic.observedTimestamp("2026-09-08T00:00:00Z") },
+  ];
+  for (const [direction, expected] of [
+    ["asc", ["older", "newer", "never"]],
+    ["desc", ["newer", "older", "never"]],
+  ]) {
+    assert.deepEqual(logic.sortRowsByColumns(
+      rows,
+      [{ key: "observed", direction }],
+      (row) => row.observed,
+      (left, right) => left.id.localeCompare(right.id),
+    ).map((row) => row.id), expected);
+  }
 });
 
 test("Codex versions are trimmed and missing versions render unavailable", () => {

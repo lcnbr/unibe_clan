@@ -755,8 +755,9 @@ There are no mutating HTTP routes.
 App Server is experimental, so changing Codex versions is an explicit
 compatibility task:
 
-1. Update the Nixpkgs input only to a revision containing the candidate Codex
-   package, then verify it with
+1. Run `nix develop path:. -c just update-codex` so the root and standalone
+   Home Manager locks select the same `SecBear/codex-nix` revision, then verify
+   it with
    `nix eval --raw .#packages.x86_64-linux.codex-cli.version`.
 2. Generate the candidate's protocol bundle in a temporary directory:
 
@@ -775,7 +776,7 @@ compatibility task:
 5. Test signed-in, signed-out, API-key, multi-bucket, sparse-update, restart,
    and on-machine account-switch behavior.
 6. Only after all checks pass, update
-   `services.codexUsageDashboard.expectedCodexVersion`, the flake comment,
-   and the lock file in the same change.
+   `services.codexUsageDashboard.expectedCodexVersion` in the same change as
+   both lock files.
 
-Until that procedure is complete, keep the Codex CLI pin at `0.149.0`.
+Until that procedure is complete, keep the previously tested Codex CLI pin.

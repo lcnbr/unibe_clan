@@ -3,11 +3,10 @@
   lib,
   pkgs,
   codexUsername,
+  codexPackage,
   ...
 }: let
-  codexPackage = pkgs.callPackage ./package.nix {};
   sharedHomeSource = pkgs.writeText "codex-home.nix" (builtins.readFile ./home.nix);
-  sharedPackageSource = pkgs.writeText "codex-package.nix" (builtins.readFile ./package.nix);
   sharedUsersSource = pkgs.writeText "codex-users.nix" (builtins.readFile ./users.nix);
   standaloneFlakeSource = pkgs.writeText "codex-flake-${codexUsername}.nix" ''
     {
@@ -17,13 +16,20 @@
         nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
         home-manager.url = "github:nix-community/home-manager";
         home-manager.inputs.nixpkgs.follows = "nixpkgs";
+        codex-nix = {
+          url = "github:SecBear/codex-nix";
+          inputs.nixpkgs.follows = "nixpkgs";
+        };
       };
 
-      outputs = { nixpkgs, home-manager, ... }: {
+      outputs = { nixpkgs, home-manager, codex-nix, ... }: {
         homeConfigurations."${codexUsername}" = home-manager.lib.homeManagerConfiguration {
           pkgs = nixpkgs.legacyPackages.x86_64-linux;
           modules = [ ./home.nix ];
-          extraSpecialArgs.codexUsername = "${codexUsername}";
+          extraSpecialArgs = {
+            codexUsername = "${codexUsername}";
+            codexPackage = codex-nix.packages.x86_64-linux.default;
+          };
         };
       };
     }
@@ -32,10 +38,6 @@
     {
       source = sharedHomeSource;
       target = "home.nix";
-    }
-    {
-      source = sharedPackageSource;
-      target = "package.nix";
     }
     {
       source = sharedUsersSource;
@@ -86,10 +88,11 @@ in {
 
   # Home Manager normally links managed files back into the Nix store. A flake
   # cannot follow those out-of-tree links during pure evaluation, so install
-  # regular files atomically instead. The identity-neutral home.nix and its
-  # package expression are byte-identical for every account. These per-user
-  # files remain a recovery copy; ordinary `nh home switch` uses the editable
-  # shared flake under /common/nix/clan.
+  # regular files atomically instead. The identity-neutral home.nix is
+  # byte-identical for every account. These per-user files remain a recovery
+  # copy; ordinary `nh home switch` uses the editable shared flake under
+  # /common/nix/clan. The pinned codex-nix input supplies the same Codex
+  # derivation to the host deployment and standalone flake.
   home.activation.installUnifiedCodexHome = lib.hm.dag.entryAfter ["linkGeneration"] ''
     targetDir=${lib.escapeShellArg "${config.xdg.configHome}/home-manager"}
     backupSuffix=.before-codex-unification

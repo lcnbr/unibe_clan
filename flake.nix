@@ -11,6 +11,11 @@
     # New flake-parts input
     flake-parts.url = "github:hercules-ci/flake-parts";
     flake-parts.inputs.nixpkgs-lib.follows = "nixpkgs";
+    codex-nix = {
+      url = "github:SecBear/codex-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.flake-parts.follows = "flake-parts";
+    };
     impermanence.url = "github:nix-community/impermanence";
     clan-core = {
       url = "git+https://git.clan.lol/clan/clan-core";
@@ -53,7 +58,9 @@
         meta.name = "unibe-clan"; # Ensure to choose a unique name.
 
         modules.tailscale = import ./service-modules/tailscale.nix;
-        modules.codex-usage-dashboard = import ./service-modules/codex-usage-dashboard.nix;
+        modules.codex-usage-dashboard = import ./service-modules/codex-usage-dashboard.nix {
+          inherit inputs;
+        };
 
         inventory.instances.tailscale = {
           module = {
@@ -107,6 +114,8 @@
               home-manager.nixosModules.home-manager
             ];
             nixpkgs.hostPlatform = "x86_64-linux";
+            home-manager.extraSpecialArgs.codexPackage =
+              inputs.codex-nix.packages.x86_64-linux.default;
           };
         };
       };
@@ -123,7 +132,7 @@
               pkgs.callPackage ./packages/codex-usage-dashboard/package.nix {};
           }
           // lib.optionalAttrs (system == "x86_64-linux") {
-            codex-cli = pkgs.callPackage ./home-manager/codex/package.nix {};
+            codex-cli = inputs.codex-nix.packages.${system}.default;
           }
         );
 
@@ -137,7 +146,7 @@
             };
           }
           // lib.optionalAttrs (system == "x86_64-linux") {
-            codex-cli = pkgs.callPackage ./home-manager/codex/package.nix {};
+            codex-cli = inputs.codex-nix.packages.${system}.default;
           }
         );
 

@@ -1,4 +1,4 @@
-{...}: {
+{inputs, ...}: {
   _class = "clan.service";
   manifest.name = "codex-usage-dashboard";
   manifest.description = "Authenticated dashboard for isolated local Codex account quotas";
@@ -17,7 +17,9 @@
         lib,
         pkgs,
         ...
-      }: {
+      }: let
+        codexPackage = inputs.codex-nix.packages.${pkgs.stdenv.hostPlatform.system}.default;
+      in {
         imports = [
           ../packages/codex-usage-dashboard/nix/module.nix
         ];
@@ -49,8 +51,8 @@
         services.codexUsageDashboard = {
           enable = true;
           package = pkgs.callPackage ../packages/codex-usage-dashboard/package.nix {};
-          codexPackage = pkgs.callPackage ../home-manager/codex/package.nix {};
-          expectedCodexVersion = "0.153.4";
+          inherit codexPackage;
+          expectedCodexVersion = "0.154.0";
           users = lib.attrNames (lib.filterAttrs (_: user: user.isNormalUser or false) config.users.users);
           expectedAnchors = {
             codex-dummy-0 = "localunitarity@gmail.com";

@@ -30,6 +30,29 @@
         "url": "https://git.clan.lol/clan/clan-core"
       }
     },
+    "codex-nix": {
+      "inputs": {
+        "flake-parts": [
+          "flake-parts"
+        ],
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1788994695,
+        "narHash": "sha256-d1gZBiR4avqWQ9BpyF27ESY9kWa+OH85sk8Nddwg3P4=",
+        "owner": "SecBear",
+        "repo": "codex-nix",
+        "rev": "0d0158437534cb15688f64adc59f36a77464079e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "SecBear",
+        "repo": "codex-nix",
+        "type": "github"
+      }
+    },
     "data-mesher": {
       "inputs": {
         "flake-parts": [
@@ -333,6 +356,7 @@
     "root": {
       "inputs": {
         "clan-core": "clan-core",
+        "codex-nix": "codex-nix",
         "flake-parts": "flake-parts",
         "home-manager": "home-manager",
         "impermanence": "impermanence",

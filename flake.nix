@@ -58,6 +58,7 @@
         meta.name = "unibe-clan"; # Ensure to choose a unique name.
 
         modules.tailscale = import ./service-modules/tailscale.nix;
+        modules.nixci-cache = import ./service-modules/nixci-cache.nix;
         modules.codex-usage-dashboard = import ./service-modules/codex-usage-dashboard.nix {
           inherit inputs;
         };
@@ -72,6 +73,18 @@
           roles.peer.machines.itpmario = {};
           roles.peer.machines.itppeach = {};
           roles.peer.machines.itphlies = {};
+        };
+
+        inventory.instances.nixci-cache = {
+          module = {
+            name = "nixci-cache";
+            input = "self";
+          };
+
+          roles.client.machines.itpbowser = {};
+          roles.client.machines.itpmario = {};
+          roles.client.machines.itppeach = {};
+          roles.client.machines.itphlies = {};
         };
 
         inventory.instances.codex-usage-dashboard = {

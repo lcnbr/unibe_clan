@@ -1,12 +1,15 @@
-# NixCI cache credentials
+# NixCI cache
 
-The `nixci-cache` client role gives every normal user on the assigned machines
-read access to a shared NixCI credential. These users share the token's account
-and permissions. System service accounts are excluded.
+The `nixci-cache` client role lets the Nix daemon download signed builds from
+`https://cache.nix-ci.com`, alongside the standard NixOS cache. It also gives every
+normal user on the assigned machines read access to a shared NixCI credential.
+These users share the token's account and permissions. System service accounts
+are excluded from that credential group.
 
 Clan stores the netrc encrypted under `vars/shared/nixci-cache/netrc`. SOPS
 installs it as `root:nixci-cache`, mode `0440`, and the login environment exposes
-its path through `NIXCI_NETRC`. Personal `~/.netrc` files are left alone.
+its path through `NIXCI_NETRC`. The daemon uses the same file through
+`nix.settings.netrc-file`. Personal `~/.netrc` files are left alone.
 
 In GammaLoop, use `just ci-checks-and-upload` after incorporating the CI changes.
 Ordinary builds and other repositories do not automatically upload. This service
@@ -24,7 +27,12 @@ After logging in, check access without displaying the credential:
 ```sh
 id -nG
 test -r "$NIXCI_NETRC"
+nix config show | rg '^(substituters|trusted-public-keys|netrc-file) ='
 ```
+
+The settings should include the NixCI URL, its `nix-ci:` signing key, and the
+shared netrc path. Ordinary builds can then reuse matching cached outputs without
+accepting per-flake cache settings. Signature verification remains enabled.
 
 ## Replace the credential
 

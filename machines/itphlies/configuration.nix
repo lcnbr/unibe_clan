@@ -98,6 +98,14 @@ in {
 
   boot.initrd.systemd.emergencyAccess = true;
 
+  # Keep swap independent from the single-device ZFS pool. The logical zram
+  # capacity is capped; physical memory is consumed only as pages are swapped.
+  zramSwap = {
+    enable = true;
+    algorithm = "zstd";
+    memoryMax = 500 * 1024 * 1024 * 1024;
+  };
+
   programs.nix-ld.enable = true;
   services.codexUsageDashboard.codexVersionTargets = {
     "/nix/store/al1ya5a2myhlvrwrgsiws3gyr621wa32-codex-0.149.0/bin/codex" = "0.149.0";

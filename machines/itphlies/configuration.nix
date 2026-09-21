@@ -17,6 +17,7 @@
     ++ dummyUserNames;
 in {
   imports = [
+    ./memory-exclusions.nix
     # contains your disk format and partitioning configuration.
     ../../modules/user-disko.nix
     ../../modules/shared.nix

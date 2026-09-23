@@ -8,11 +8,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1788994695,
-        "narHash": "sha256-d1gZBiR4avqWQ9BpyF27ESY9kWa+OH85sk8Nddwg3P4=",
+        "lastModified": 1790141555,
+        "narHash": "sha256-Pb7HjyBm6PrO/zz1qNbBXfZn8VClOQb71040DtxppM8=",
         "owner": "SecBear",
         "repo": "codex-nix",
-        "rev": "0d0158437534cb15688f64adc59f36a77464079e",
+        "rev": "af259708d1e25955aa6c6a1d0cab40c8c56b4c2b",
         "type": "github"
       },
       "original": {

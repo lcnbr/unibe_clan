@@ -52,7 +52,7 @@
           enable = true;
           package = pkgs.callPackage ../packages/codex-usage-dashboard/package.nix {};
           inherit codexPackage;
-          expectedCodexVersion = "0.156.1";
+          expectedCodexVersion = "0.159.0";
           users = lib.attrNames (lib.filterAttrs (_: user: user.isNormalUser or false) config.users.users);
           expectedAnchors = {
             codex-dummy-0 = "localunitarity@gmail.com";

@@ -108,6 +108,13 @@ in {
   };
 
   programs.nix-ld.enable = true;
+
+  # The Codex phone app probes SSH hosts with PATH=/usr/bin:/bin. Keep uname
+  # reachable there so its OS detection works with NixOS's executable layout.
+  systemd.tmpfiles.rules = [
+    "L /usr/bin/uname - - - - /run/current-system/sw/bin/uname"
+  ];
+
   services.codexUsageDashboard.codexVersionTargets = {
     "/nix/store/al1ya5a2myhlvrwrgsiws3gyr621wa32-codex-0.149.0/bin/codex" = "0.149.0";
     "/nix/store/9cb2ijpwa9hcv8i0qmrxl0pc5731xm9w-codex-0.144.1/bin/codex-raw" = "0.144.1";
